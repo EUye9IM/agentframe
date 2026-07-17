@@ -14,7 +14,7 @@ def run_bash(command: str) -> str:
             capture_output=True,
             text=True,
             timeout=30,
-            cwd="/home/otix",
+            cwd=None,
         )
         output = result.stdout.strip()
         if result.stderr:

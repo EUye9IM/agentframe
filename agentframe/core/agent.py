@@ -133,6 +133,13 @@ class Agent:
 
         approved = self.on_tool_call(last_message.tool_calls)
 
+        approved_ids = {tc["id"] for tc in approved}
+        for tc in last_message.tool_calls:
+            if tc["id"] not in approved_ids:
+                messages.append(
+                    ToolMessage(content="(tool call rejected by user)", tool_call_id=tc["id"])
+                )
+
         for tc in approved:
             result = self.tool_registry.call(tc["name"], tc["args"])
             messages.append(
@@ -186,6 +193,13 @@ class Agent:
             return {"messages": messages}
 
         approved = self.on_tool_call(last_message.tool_calls)
+
+        approved_ids = {tc["id"] for tc in approved}
+        for tc in last_message.tool_calls:
+            if tc["id"] not in approved_ids:
+                messages.append(
+                    ToolMessage(content="(tool call rejected by user)", tool_call_id=tc["id"])
+                )
 
         for tc in approved:
             tool = self.tool_registry.tools.get(tc["name"])
