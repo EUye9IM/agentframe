@@ -26,7 +26,7 @@ class TestLLMClientMessageConversion:
 
     def _capture_kwargs(self, messages, tools=None):
         client = LLMClient(model="gpt-4o")
-        with patch("litellm.completion") as mock:
+        with patch("agentframe.llm.client.completion") as mock:
             mock.return_value = _make_mock_response()
             try:
                 client.invoke(messages, tools=tools)
@@ -92,7 +92,7 @@ class TestLLMClientMessageConversion:
 
     def test_model_passed(self):
         client = LLMClient(model="gpt-4o-mini")
-        with patch("litellm.completion") as mock:
+        with patch("agentframe.llm.client.completion") as mock:
             mock.return_value = _make_mock_response()
             try:
                 client.invoke([HumanMessage(content="hi")])
@@ -102,7 +102,7 @@ class TestLLMClientMessageConversion:
 
     def test_api_key_passed(self):
         client = LLMClient(model="gpt-4o", api_key="sk-test")
-        with patch("litellm.completion") as mock:
+        with patch("agentframe.llm.client.completion") as mock:
             mock.return_value = _make_mock_response()
             try:
                 client.invoke([HumanMessage(content="hi")])

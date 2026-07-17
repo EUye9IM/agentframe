@@ -143,14 +143,7 @@ class ChatAgent:
     async def chat(self, user_input: str, session_id: str | None = None) -> str:
         self._ensure_agent()
         self._reasoning_buf = []
-        import time as _t
-        print("  [loading...]", end="", flush=True)
-        t0 = _t.time()
-        result = await self._agent.ainvoke(user_input, session_id=session_id)
-        dur = _t.time() - t0
-        # clear the loading line
-        print("\r" + " " * 20 + "\r", end="", flush=True)
-        return result
+        return await self._agent.ainvoke(user_input, session_id=session_id)
 
     @classmethod
     def from_config(cls, cfg: dict) -> ChatAgent:
@@ -167,6 +160,8 @@ class ChatAgent:
 # ---------------------------------------------------------------------------
 
 async def main_loop(agent: ChatAgent) -> None:
+    import litellm  # warm up — 4–5s one-time load
+
     print()
     print(f"  model: {agent.model}")
     print(f"  /quit to exit")
