@@ -143,7 +143,14 @@ class ChatAgent:
     async def chat(self, user_input: str, session_id: str | None = None) -> str:
         self._ensure_agent()
         self._reasoning_buf = []
-        return await self._agent.ainvoke(user_input, session_id=session_id)
+        import time as _t
+        print("  [loading...]", end="", flush=True)
+        t0 = _t.time()
+        result = await self._agent.ainvoke(user_input, session_id=session_id)
+        dur = _t.time() - t0
+        # clear the loading line
+        print("\r" + " " * 20 + "\r", end="", flush=True)
+        return result
 
     @classmethod
     def from_config(cls, cfg: dict) -> ChatAgent:

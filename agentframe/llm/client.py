@@ -4,7 +4,6 @@ import json
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
-from litellm import completion, acompletion
 from langchain_core.messages import (
     BaseMessage,
     SystemMessage,
@@ -80,6 +79,8 @@ class LLMClient:
         self.kwargs = kwargs
 
     def invoke(self, messages: list[BaseMessage], tools: list[dict] | None = None) -> dict:
+        from litellm import completion
+
         openai_messages = _convert_messages(messages)
         kwargs = _build_kwargs(self.model, openai_messages, tools, self.api_key, **self.kwargs)
 
@@ -111,6 +112,8 @@ class LLMClient:
         return {"message": ai_msg, "usage": usage}
 
     def stream(self, messages: list[BaseMessage], tools: list[dict] | None = None) -> Iterator[dict]:
+        from litellm import completion
+
         openai_messages = _convert_messages(messages)
         kwargs = _build_kwargs(self.model, openai_messages, tools, self.api_key, **self.kwargs)
         kwargs["stream"] = True
@@ -153,6 +156,8 @@ class LLMClient:
         yield {"type": "done", "tool_calls": tool_calls, "usage": usage}
 
     async def astream(self, messages: list[BaseMessage], tools: list[dict] | None = None) -> AsyncIterator[dict]:
+        from litellm import acompletion
+
         openai_messages = _convert_messages(messages)
         kwargs = _build_kwargs(self.model, openai_messages, tools, self.api_key, **self.kwargs)
         kwargs["stream"] = True
