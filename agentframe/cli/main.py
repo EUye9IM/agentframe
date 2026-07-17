@@ -108,7 +108,9 @@ class ChatAgent:
         raw = "".join(self._reasoning_buf)
         self._reasoning_buf = []
         cleaned = _clean_reasoning(raw)
-        if cleaned == first_content.strip():
+        if not cleaned:
+            return
+        if cleaned and cleaned in first_content.strip():
             return
         print()
         print(f"\033[2m{cleaned[:600]}\033[0m")

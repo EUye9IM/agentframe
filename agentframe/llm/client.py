@@ -73,6 +73,66 @@ def _finish_tool_calls(tool_call_acc: dict[int, dict]) -> list[dict]:
     return tool_calls
 
 
+def _parse_tool_calls_from_message(msg) -> list[dict]:
+    tool_calls = []
+    if hasattr(msg, "tool_calls") and msg.tool_calls:
+        for tc in msg.tool_calls:
+            tool_calls.append({
+                "name": tc.function.name,
+                "args": json.loads(tc.function.arguments),
+                "id": tc.id,
+                "type": "tool_call",
+            })
+    return tool_calls
+
+
+def _parse_completion_response(response) -> dict:
+    msg = response.choices[0].message
+    tool_calls = _parse_tool_calls_from_message(msg)
+    ai_msg = AIMessage(content=msg.content or "", tool_calls=tool_calls or [])
+    usage = {}
+    if hasattr(response, "usage") and response.usage:
+        usage = {
+            "prompt_tokens": response.usage.prompt_tokens,
+            "completion_tokens": response.usage.completion_tokens,
+            "total_tokens": response.usage.total_tokens,
+        }
+    return {"message": ai_msg, "usage": usage}
+
+
+def _process_stream_chunk(chunk, tool_call_acc: dict[int, dict]) -> list[dict]:
+    events: list[dict] = []
+    delta = chunk.choices[0].delta
+
+    if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+        events.append({"type": "reasoning", "content": delta.reasoning_content})
+    if delta.content:
+        events.append({"type": "content", "content": delta.content})
+    if hasattr(delta, "tool_calls") and delta.tool_calls:
+        for tc_delta in delta.tool_calls:
+            idx = tc_delta.index
+            if idx not in tool_call_acc:
+                tool_call_acc[idx] = {"id": "", "name": "", "args": ""}
+            if tc_delta.id:
+                tool_call_acc[idx]["id"] = tc_delta.id
+            if tc_delta.function:
+                if tc_delta.function.name:
+                    tool_call_acc[idx]["name"] = tc_delta.function.name
+                if tc_delta.function.arguments:
+                    tool_call_acc[idx]["args"] += tc_delta.function.arguments
+    return events
+
+
+def _extract_stream_usage(response) -> dict:
+    if hasattr(response, "usage") and response.usage:
+        return {
+            "prompt_tokens": response.usage.prompt_tokens,
+            "completion_tokens": response.usage.completion_tokens,
+            "total_tokens": response.usage.total_tokens,
+        }
+    return {}
+
+
 class LLMClient:
     def __init__(self, model: str, api_key: str | None = None, **kwargs: Any):
         self.model = model
@@ -82,114 +142,38 @@ class LLMClient:
     def invoke(self, messages: list[BaseMessage], tools: list[dict] | None = None) -> dict:
         openai_messages = _convert_messages(messages)
         kwargs = _build_kwargs(self.model, openai_messages, tools, self.api_key, **self.kwargs)
-
         response = completion(**kwargs)
+        return _parse_completion_response(response)
 
-        choice = response.choices[0]
-        msg = choice.message
-
-        tool_calls = []
-        if hasattr(msg, "tool_calls") and msg.tool_calls:
-            for tc in msg.tool_calls:
-                tool_calls.append({
-                    "name": tc.function.name,
-                    "args": json.loads(tc.function.arguments),
-                    "id": tc.id,
-                    "type": "tool_call",
-                })
-
-        ai_msg = AIMessage(content=msg.content or "", tool_calls=tool_calls or [])
-
-        usage = {}
-        if hasattr(response, "usage") and response.usage:
-            usage = {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
-            }
-
-        return {"message": ai_msg, "usage": usage}
+    async def ainvoke(self, messages: list[BaseMessage], tools: list[dict] | None = None) -> dict:
+        openai_messages = _convert_messages(messages)
+        kwargs = _build_kwargs(self.model, openai_messages, tools, self.api_key, **self.kwargs)
+        response = await acompletion(**kwargs)
+        return _parse_completion_response(response)
 
     def stream(self, messages: list[BaseMessage], tools: list[dict] | None = None) -> Iterator[dict]:
         openai_messages = _convert_messages(messages)
         kwargs = _build_kwargs(self.model, openai_messages, tools, self.api_key, **self.kwargs)
         kwargs["stream"] = True
-
         response = completion(**kwargs)
 
         tool_call_acc: dict[int, dict] = {}
         for chunk in response:
-            delta = chunk.choices[0].delta
+            yield from _process_stream_chunk(chunk, tool_call_acc)
 
-            if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-                yield {"type": "reasoning", "content": delta.reasoning_content}
-
-            if delta.content:
-                yield {"type": "content", "content": delta.content}
-
-            if hasattr(delta, "tool_calls") and delta.tool_calls:
-                for tc_delta in delta.tool_calls:
-                    idx = tc_delta.index
-                    if idx not in tool_call_acc:
-                        tool_call_acc[idx] = {"id": "", "name": "", "args": ""}
-                    if tc_delta.id:
-                        tool_call_acc[idx]["id"] = tc_delta.id
-                    if tc_delta.function:
-                        if tc_delta.function.name:
-                            tool_call_acc[idx]["name"] = tc_delta.function.name
-                        if tc_delta.function.arguments:
-                            tool_call_acc[idx]["args"] += tc_delta.function.arguments
-
-        tool_calls = _finish_tool_calls(tool_call_acc)
-
-        usage = {}
-        if hasattr(response, "usage") and response.usage:
-            usage = {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
-            }
-
-        yield {"type": "done", "tool_calls": tool_calls, "usage": usage}
+        yield {"type": "done", "tool_calls": _finish_tool_calls(tool_call_acc),
+               "usage": _extract_stream_usage(response)}
 
     async def astream(self, messages: list[BaseMessage], tools: list[dict] | None = None) -> AsyncIterator[dict]:
         openai_messages = _convert_messages(messages)
         kwargs = _build_kwargs(self.model, openai_messages, tools, self.api_key, **self.kwargs)
         kwargs["stream"] = True
-
         response = await acompletion(**kwargs)
 
         tool_call_acc: dict[int, dict] = {}
         async for chunk in response:
-            delta = chunk.choices[0].delta
+            for event in _process_stream_chunk(chunk, tool_call_acc):
+                yield event
 
-            if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-                yield {"type": "reasoning", "content": delta.reasoning_content}
-
-            if delta.content:
-                yield {"type": "content", "content": delta.content}
-
-            if hasattr(delta, "tool_calls") and delta.tool_calls:
-                for tc_delta in delta.tool_calls:
-                    idx = tc_delta.index
-                    if idx not in tool_call_acc:
-                        tool_call_acc[idx] = {"id": "", "name": "", "args": ""}
-                    if tc_delta.id:
-                        tool_call_acc[idx]["id"] = tc_delta.id
-                    if tc_delta.function:
-                        if tc_delta.function.name:
-                            tool_call_acc[idx]["name"] = tc_delta.function.name
-                        if tc_delta.function.arguments:
-                            tool_call_acc[idx]["args"] += tc_delta.function.arguments
-
-        tool_calls = _finish_tool_calls(tool_call_acc)
-
-        usage = {}
-        if hasattr(response, "usage") and response.usage:
-            usage = {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
-            }
-
-        yield {"type": "done", "tool_calls": tool_calls, "usage": usage}
+        yield {"type": "done", "tool_calls": _finish_tool_calls(tool_call_acc),
+               "usage": _extract_stream_usage(response)}

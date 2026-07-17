@@ -16,7 +16,9 @@ class ToolRegistry:
             ft = function_tool(tool)
             self._tools[ft.name] = ft
         elif isinstance(tool, dict):
-            name = tool.get("function", {}).get("name", str(id(tool)))
+            name = tool.get("function", {}).get("name")
+            if not name:
+                raise ValueError("dict tool must have 'function.name' field")
             self._tools[name] = tool
         else:
             raise TypeError(f"Unsupported tool type: {type(tool)}")

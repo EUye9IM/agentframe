@@ -10,3 +10,7 @@ wheels/
 .venv
 .pytest_cache
 pyrightconfig.json
+
+# tools
+.codegraph
+opencode.json*

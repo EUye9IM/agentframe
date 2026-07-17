@@ -39,11 +39,13 @@ class Agent:
                 self.tool_registry.register(t)
 
         self.mcp_configs = mcp_configs or []
+        self._mcp_clients: list | None = None
 
         self.compressor: Compressor | None = None
         if compress_threshold is not None:
             self.compressor = Compressor(
                 llm_invoke_fn=self.llm_client.invoke,
+                llm_ainvoke_fn=self.llm_client.ainvoke,
                 threshold=compress_threshold,
             )
 
@@ -70,58 +72,59 @@ class Agent:
     # Graph construction
     # ------------------------------------------------------------------
 
-    def _build_graph(self) -> None:
+    def _build_graph_impl(self, agent_node, tools_node, should_continue_fn) -> None:
         workflow = StateGraph(AgentState)
-
-        workflow.add_node("agent", self._call_agent)
-        workflow.add_node("tools", self._call_tools)
-
+        workflow.add_node("agent", agent_node)
+        workflow.add_node("tools", tools_node)
         workflow.set_entry_point("agent")
-
         workflow.add_conditional_edges(
             "agent",
-            self._should_continue,
+            should_continue_fn,
             {"tools": "tools", END: END},
         )
         workflow.add_edge("tools", "agent")
-
         self._graph = workflow.compile(checkpointer=self.checkpointer)
+
+    def _build_graph(self) -> None:
+        self._build_graph_impl(self._call_agent, self._call_tools, self._should_continue)
 
     async def _abuild_graph(self) -> None:
-        workflow = StateGraph(AgentState)
+        self._build_graph_impl(self._acall_agent, self._acall_tools, self._ashould_continue)
 
-        workflow.add_node("agent", self._acall_agent)
-        workflow.add_node("tools", self._acall_tools)
+    # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
 
-        workflow.set_entry_point("agent")
+    def _prepare_agent_state(self, state: AgentState) -> tuple[list, int, list[dict] | None]:
+        messages = list(state["messages"])
+        total_tokens = state.get("total_tokens", 0)
+        if self.compressor and total_tokens > self.compressor.threshold:
+            messages = self.compressor.compress(messages)
+            total_tokens = 0
+        tools = self.tool_registry.get_openai_tools() or None
+        return messages, total_tokens, tools
 
-        workflow.add_conditional_edges(
-            "agent",
-            self._ashould_continue,
-            {"tools": "tools", END: END},
-        )
-        workflow.add_edge("tools", "agent")
-
-        self._graph = workflow.compile(checkpointer=self.checkpointer)
+    def _process_tool_calls(
+        self, messages: list, last_message: AIMessage
+    ) -> tuple[list[dict], list]:
+        approved = self.on_tool_call(last_message.tool_calls)
+        approved_ids = {tc["id"] for tc in approved}
+        for tc in last_message.tool_calls:
+            if tc["id"] not in approved_ids:
+                messages.append(
+                    ToolMessage(content="(tool call rejected by user)", tool_call_id=tc["id"])
+                )
+        return approved, messages
 
     # ------------------------------------------------------------------
     # Sync graph nodes
     # ------------------------------------------------------------------
 
     def _call_agent(self, state: AgentState) -> dict:
-        messages = list(state["messages"])
-        total_tokens = state.get("total_tokens", 0)
-
-        if self.compressor and total_tokens > self.compressor.threshold:
-            messages = self.compressor.compress(messages)
-            total_tokens = 0
-
-        tools = self.tool_registry.get_openai_tools() or None
+        messages, total_tokens, tools = self._prepare_agent_state(state)
         response = self.llm_client.invoke(messages, tools=tools)
-
         total_tokens += response["usage"].get("total_tokens", 0)
         messages.append(response["message"])
-
         return {"messages": messages, "total_tokens": total_tokens}
 
     def _call_tools(self, state: AgentState) -> dict:
@@ -131,17 +134,10 @@ class Agent:
         if not isinstance(last_message, AIMessage) or not last_message.tool_calls:
             return {"messages": messages}
 
-        approved = self.on_tool_call(last_message.tool_calls)
-
-        approved_ids = {tc["id"] for tc in approved}
-        for tc in last_message.tool_calls:
-            if tc["id"] not in approved_ids:
-                messages.append(
-                    ToolMessage(content="(tool call rejected by user)", tool_call_id=tc["id"])
-                )
-
+        approved, messages = self._process_tool_calls(messages, last_message)
         for tc in approved:
             result = self.tool_registry.call(tc["name"], tc["args"])
+            self.on_tool_result(tc["name"], str(result))
             messages.append(
                 ToolMessage(content=str(result), tool_call_id=tc["id"])
             )
@@ -159,14 +155,7 @@ class Agent:
     # ------------------------------------------------------------------
 
     async def _acall_agent(self, state: AgentState) -> dict:
-        messages = list(state["messages"])
-        total_tokens = state.get("total_tokens", 0)
-
-        if self.compressor and total_tokens > self.compressor.threshold:
-            messages = self.compressor.compress(messages)
-            total_tokens = 0
-
-        tools = self.tool_registry.get_openai_tools() or None
+        messages, total_tokens, tools = await self._prepare_agent_state_async(state)
 
         full_content = ""
         tool_calls: list[dict] = []
@@ -185,6 +174,15 @@ class Agent:
 
         return {"messages": messages, "total_tokens": total_tokens}
 
+    async def _prepare_agent_state_async(self, state: AgentState) -> tuple[list, int, list[dict] | None]:
+        messages = list(state["messages"])
+        total_tokens = state.get("total_tokens", 0)
+        if self.compressor and total_tokens > self.compressor.threshold:
+            messages = await self.compressor.acompress(messages)
+            total_tokens = 0
+        tools = self.tool_registry.get_openai_tools() or None
+        return messages, total_tokens, tools
+
     async def _acall_tools(self, state: AgentState) -> dict:
         messages = list(state["messages"])
         last_message = messages[-1]
@@ -192,15 +190,7 @@ class Agent:
         if not isinstance(last_message, AIMessage) or not last_message.tool_calls:
             return {"messages": messages}
 
-        approved = self.on_tool_call(last_message.tool_calls)
-
-        approved_ids = {tc["id"] for tc in approved}
-        for tc in last_message.tool_calls:
-            if tc["id"] not in approved_ids:
-                messages.append(
-                    ToolMessage(content="(tool call rejected by user)", tool_call_id=tc["id"])
-                )
-
+        approved, messages = self._process_tool_calls(messages, last_message)
         for tc in approved:
             tool = self.tool_registry.tools.get(tc["name"])
             if isinstance(tool, dict):
@@ -214,18 +204,34 @@ class Agent:
 
         return {"messages": messages}
 
-    async def _call_mcp_tool(self, name: str, args: dict) -> str:
+    async def _ensure_mcp_connected(self) -> None:
+        if self._mcp_clients is not None:
+            return
         from ..tools.mcp_client import MCPClient
 
+        self._mcp_clients = []
         for config in self.mcp_configs:
             client = MCPClient(config)
             await client.connect()
+            self._mcp_clients.append(client)
+
+    async def _call_mcp_tool(self, name: str, args: dict) -> str:
+        await self._ensure_mcp_connected()
+        last_error: Exception | None = None
+        for client in self._mcp_clients:
             try:
-                result = await client.call_tool(name, args)
-                return result
-            finally:
-                await client.close()
+                return await client.call_tool(name, args)
+            except Exception as e:
+                last_error = e
+        if last_error:
+            return f"Error: MCP tool '{name}' failed: {last_error}"
         return f"Error: MCP tool '{name}' not found"
+
+    async def aclose_mcp(self) -> None:
+        if self._mcp_clients:
+            for client in self._mcp_clients:
+                await client.close()
+            self._mcp_clients = None
 
     async def _ashould_continue(self, state: AgentState) -> str:
         return self._should_continue(state)

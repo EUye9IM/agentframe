@@ -22,7 +22,11 @@ class MCPTool:
 
     async def call(self, arguments: dict[str, Any]) -> str:
         result = await self._session.call_tool(self.name, arguments)
-        return str(result.content)
+        text_parts = []
+        for item in result.content:
+            if hasattr(item, "text"):
+                text_parts.append(item.text)
+        return "\n".join(text_parts) if text_parts else str(result.content)
 
 
 class MCPClient:
