@@ -70,7 +70,7 @@ class LLMClient:
                     "type": "tool_call",
                 })
 
-        ai_msg = AIMessage(content=msg.content or "", tool_calls=tool_calls or None)
+        ai_msg = AIMessage(content=msg.content or "", tool_calls=tool_calls or [])
 
         usage = {}
         if hasattr(response, "usage") and response.usage:
