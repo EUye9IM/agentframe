@@ -2,31 +2,116 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+import sys
+import termios
+import tty
 
-from agentframe import Agent
-from agentframe.cli.config import load_config
+
+# ---------------------------------------------------------------------------
+# Custom UTF‑8 aware input (Chinese backspace fix)
+# ---------------------------------------------------------------------------
+
+def _clean_reasoning(text: str) -> str:
+    text = re.sub(r"  +", " ", text)
+    text = re.sub(r"(?<=[\u4e00-\u9fff]) (?=[\u4e00-\u9fff])", "", text)
+    text = re.sub(r"(?<=[\u4e00-\u9fff]) ", "", text)
+    text = re.sub(r" (?=[\u4e00-\u9fff])", "", text)
+    return text.strip()
 
 
-class ChatAgent(Agent):
+def _utf8_input(prompt: str = "") -> str:
+    """Read a line from stdin with proper UTF‑8 backspace handling."""
+    if not sys.stdin.isatty():
+        return input(prompt)
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # silence the inherited invoke/stream — we only chat
-        self._chat_history: list = []
-        self._reasoning_printed = False
+    if prompt:
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    chars: list[bytes] = []
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = sys.stdin.buffer.read(1)
+            if ch in (b"\r", b"\n"):
+                sys.stdout.write("\r\n")
+                break
+            if ch == b"\x03":  # Ctrl+C
+                raise KeyboardInterrupt
+            if ch == b"\x04":  # Ctrl+D
+                raise EOFError
+            if ch in (b"\x7f", b"\x08"):  # Backspace
+                if chars:
+                    chars.pop()
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+            else:
+                chars.append(ch)
+                sys.stdout.buffer.write(ch)
+                sys.stdout.flush()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    return b"".join(chars).decode("utf-8", errors="replace").strip()
+
+
+# ---------------------------------------------------------------------------
+# ChatAgent
+# ---------------------------------------------------------------------------
+
+class ChatAgent:
+
+    def __init__(self, model: str, *, system_prompt: str = "", api_key: str = "", compress_threshold: int = 100000):
+        self._model = model
+        self._system_prompt = system_prompt
+        self._api_key = api_key
+        self._compress_threshold = compress_threshold
+        self._agent = None
+        self._reasoning_buf: list[str] = []
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    def _ensure_agent(self):
+        if self._agent is not None:
+            return
+        from agentframe import Agent as _Agent
+        self._agent = _Agent(
+            model=self._model,
+            system_prompt=self._system_prompt or None,
+            api_key=self._api_key or None,
+            compress_threshold=self._compress_threshold,
+        )
+        self._agent.on_llm_reasoning = self._on_reasoning
+        self._agent.on_llm_content = self._on_content
+        self._agent.on_tool_call = self._on_tool_call
+        self._agent.on_tool_result = self._on_tool_result
 
     # ---- hooks ----
 
-    def on_llm_reasoning(self, text: str) -> None:
-        if not self._reasoning_printed:
-            print("  ── reasoning ──")
-            self._reasoning_printed = True
-        print(f"  {text}", end="", flush=True)
+    def _on_reasoning(self, text: str) -> None:
+        self._reasoning_buf.append(text)
 
-    def on_llm_content(self, text: str) -> None:
+    def _on_content(self, text: str) -> None:
+        if self._reasoning_buf:
+            self._flush_reasoning(text)
         print(text, end="", flush=True)
 
-    def on_tool_call(self, tool_calls: list[dict]) -> list[dict]:
+    def _flush_reasoning(self, first_content: str) -> None:
+        raw = "".join(self._reasoning_buf)
+        self._reasoning_buf = []
+        cleaned = _clean_reasoning(raw)
+        if cleaned == first_content.strip():
+            return
+        print()
+        print(f"\033[2m{cleaned[:600]}\033[0m")
+        print()
+
+    def _on_tool_call(self, tool_calls: list[dict]) -> list[dict]:
         if not tool_calls:
             return tool_calls
         print()
@@ -36,7 +121,7 @@ class ChatAgent(Agent):
             print(f"  [{i + 1}] {tc['name']}({args_str})")
         print("  ────────────────")
         while True:
-            choice = input("  Execute? [y/n/i]: ").strip().lower()
+            choice = _utf8_input("  Execute? [y/n/i]: ").lower()
             if choice == "y":
                 return tool_calls
             if choice == "n":
@@ -45,19 +130,20 @@ class ChatAgent(Agent):
                 approved = []
                 for i, tc in enumerate(tool_calls):
                     args_str = json.dumps(tc["args"], ensure_ascii=False)
-                    c = input(f"  [{i + 1}] {tc['name']}({args_str})? [y/n]: ").strip().lower()
+                    c = _utf8_input(f"  [{i + 1}] {tc['name']}({args_str})? [y/n]: ").lower()
                     if c == "y":
                         approved.append(tc)
                 return approved
 
-    def on_tool_result(self, name: str, result: str) -> None:
+    def _on_tool_result(self, name: str, result: str) -> None:
         print(f"  [{name}] {result[:300]}")
 
-    # ---- chat loop ----
+    # ---- chat ----
 
     async def chat(self, user_input: str, session_id: str | None = None) -> str:
-        self._reasoning_printed = False
-        return await self.ainvoke(user_input, session_id=session_id)
+        self._ensure_agent()
+        self._reasoning_buf = []
+        return await self._agent.ainvoke(user_input, session_id=session_id)
 
     @classmethod
     def from_config(cls, cfg: dict) -> ChatAgent:
@@ -69,32 +155,41 @@ class ChatAgent(Agent):
         )
 
 
-async def main_loop(agent: ChatAgent, session_id: str | None = None) -> None:
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
+
+async def main_loop(agent: ChatAgent) -> None:
+    print()
     print(f"  model: {agent.model}")
-    print(f"  type /quit to exit\n")
+    print(f"  /quit to exit")
+    print()
 
     while True:
         try:
-            user_input = input(">>> ")
+            user_input = _utf8_input(">>> ")
         except (EOFError, KeyboardInterrupt):
             print()
             break
 
-        text = user_input.strip()
-        if not text:
+        if not user_input:
             continue
-        if text in ("/quit", "/exit"):
+        if user_input in ("/quit", "/exit"):
             break
 
-        print()
         try:
-            await agent.chat(text, session_id=session_id)
+            result = await agent.chat(user_input)
         except Exception as e:
             print(f"\n  [error] {e}")
-        print("\n")
+            continue
+
+        if result:
+            print()
 
 
 def main() -> None:
+    from agentframe.cli.config import load_config
+
     cfg = load_config()
     agent = ChatAgent.from_config(cfg)
     asyncio.run(main_loop(agent))

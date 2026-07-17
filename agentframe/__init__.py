@@ -1,9 +1,17 @@
 import os as _os
 
-# litellm: 禁用远程模型价格表拉取，用本地缓存即可
 _os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
-from .core.agent import Agent
-from .tools.function_tool import function_tool
-
 __version__ = "0.1.0"
+
+
+def __getattr__(name: str):
+    if name == "Agent":
+        from .core.agent import Agent as _Agent
+
+        return _Agent
+    if name == "function_tool":
+        from .tools.function_tool import function_tool as _ft
+
+        return _ft
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
