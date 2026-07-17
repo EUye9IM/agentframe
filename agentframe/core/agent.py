@@ -49,6 +49,23 @@ class Agent:
 
         self._graph = None
 
+    # =============================================
+    # Hooks – override in subclass for CLI etc.
+    # =============================================
+
+    def on_llm_reasoning(self, text: str) -> None:
+        """Called for each reasoning chunk during streaming."""
+
+    def on_llm_content(self, text: str) -> None:
+        """Called for each content chunk during streaming."""
+
+    def on_tool_call(self, tool_calls: list[dict]) -> list[dict]:
+        """Called before tool execution. Return approved subset. Default: approve all."""
+        return tool_calls
+
+    def on_tool_result(self, name: str, result: str) -> None:
+        """Called after each tool execution."""
+
     # ------------------------------------------------------------------
     # Graph construction
     # ------------------------------------------------------------------
@@ -114,7 +131,9 @@ class Agent:
         if not isinstance(last_message, AIMessage) or not last_message.tool_calls:
             return {"messages": messages}
 
-        for tc in last_message.tool_calls:
+        approved = self.on_tool_call(last_message.tool_calls)
+
+        for tc in approved:
             result = self.tool_registry.call(tc["name"], tc["args"])
             messages.append(
                 ToolMessage(content=str(result), tool_call_id=tc["id"])
@@ -129,7 +148,7 @@ class Agent:
         return END
 
     # ------------------------------------------------------------------
-    # Async graph nodes  (used when MCP tools are configured)
+    # Async graph nodes  (use streaming + hooks)
     # ------------------------------------------------------------------
 
     async def _acall_agent(self, state: AgentState) -> dict:
@@ -141,10 +160,21 @@ class Agent:
             total_tokens = 0
 
         tools = self.tool_registry.get_openai_tools() or None
-        response = self.llm_client.invoke(messages, tools=tools)
 
-        total_tokens += response["usage"].get("total_tokens", 0)
-        messages.append(response["message"])
+        full_content = ""
+        tool_calls: list[dict] = []
+        async for event in self.llm_client.astream(messages, tools=tools):
+            if event["type"] == "reasoning":
+                self.on_llm_reasoning(event["content"])
+            elif event["type"] == "content":
+                self.on_llm_content(event["content"])
+                full_content += event["content"]
+            elif event["type"] == "done":
+                tool_calls = event["tool_calls"]
+                total_tokens += event["usage"].get("total_tokens", 0)
+
+        ai_msg = AIMessage(content=full_content, tool_calls=tool_calls or [])
+        messages.append(ai_msg)
 
         return {"messages": messages, "total_tokens": total_tokens}
 
@@ -155,12 +185,15 @@ class Agent:
         if not isinstance(last_message, AIMessage) or not last_message.tool_calls:
             return {"messages": messages}
 
-        for tc in last_message.tool_calls:
+        approved = self.on_tool_call(last_message.tool_calls)
+
+        for tc in approved:
             tool = self.tool_registry.tools.get(tc["name"])
             if isinstance(tool, dict):
                 result = await self._call_mcp_tool(tc["name"], tc["args"])
             else:
                 result = self.tool_registry.call(tc["name"], tc["args"])
+            self.on_tool_result(tc["name"], str(result))
             messages.append(
                 ToolMessage(content=str(result), tool_call_id=tc["id"])
             )
