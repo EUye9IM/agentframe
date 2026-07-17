@@ -64,3 +64,4 @@ Conftest provides `make_response()` and `make_tool_call()` helpers.
 - **Config file**: `~/.afcli.toml` auto-created on first CLI run. `api_key` field defaults to `""` — set it or use `LLM_AUTH_KEY` / `OPENAI_API_KEY` env var.
 - **Session persistence**: pass `session_id="name"` to `invoke()`/`ainvoke()`. Must also pass a `checkpointer` (e.g. `MemorySaver` or `SqliteSaver`) when constructing Agent.
 - **`.pytest_cache`** and `**/__pycache__` are git-ignored.
+- **CLI builtin tools**: The CLI auto-registers `bash` tool (`agentframe/tools/builtin/bash.py`). No extra config needed.
