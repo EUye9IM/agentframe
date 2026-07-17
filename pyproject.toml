@@ -9,6 +9,7 @@ dependencies = [
     "langgraph >= 0.2, < 2",
     "litellm >= 1.60, < 2",
     "langchain-core >= 0.3, < 2",
+    "fastapi >= 0.100, < 1",
 ]
 
 [project.optional-dependencies]
