@@ -80,11 +80,14 @@ class ChatAgent:
         if self._agent is not None:
             return
         from agentframe import Agent as _Agent
+        from agentframe.tools.builtin.bash import run_bash
+
         self._agent = _Agent(
             model=self._model,
             system_prompt=self._system_prompt or None,
             api_key=self._api_key or None,
             compress_threshold=self._compress_threshold,
+            tools=[run_bash],
         )
         self._agent.on_llm_reasoning = self._on_reasoning
         self._agent.on_llm_content = self._on_content
