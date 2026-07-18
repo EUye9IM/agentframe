@@ -20,11 +20,12 @@ class FunctionTool:
         func: Callable,
         name: str | None = None,
         description: str | None = None,
-    ):
-        self.func = func
-        self.name = name or func.__name__
-        self.description = description or (func.__doc__ or "").strip()
-        self.openai_tool = self._build_schema()
+    ) -> None:
+        self.func: Callable = func
+        self.name: str = name or func.__name__
+        self.description: str = description or (func.__doc__ or "").strip()
+        self.openai_tool: dict = self._build_schema()
+
 
     def _build_schema(self) -> dict:
         sig = inspect.signature(self.func)

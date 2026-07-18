@@ -13,12 +13,12 @@ class Compressor:
         keep_last: int = 5,
         summary_model: str | None = None,
         llm_ainvoke_fn: Callable[..., Awaitable[dict]] | None = None,
-    ):
-        self.llm_invoke_fn = llm_invoke_fn
-        self.llm_ainvoke_fn = llm_ainvoke_fn
-        self.threshold = threshold
-        self.keep_last = keep_last
-        self.summary_model = summary_model
+    ) -> None:
+        self.llm_invoke_fn: Callable[..., dict] = llm_invoke_fn
+        self.llm_ainvoke_fn: Callable[..., Awaitable[dict]] | None = llm_ainvoke_fn
+        self.threshold: int = threshold
+        self.keep_last: int = keep_last
+        self.summary_model: str | None = summary_model
 
     def compress(self, messages: list[BaseMessage]) -> list[BaseMessage]:
         if len(messages) <= self.keep_last + 1:

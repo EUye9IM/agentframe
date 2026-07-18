@@ -6,6 +6,7 @@ import re
 import sys
 import termios
 import tty
+from typing import Any
 
 
 # ---------------------------------------------------------------------------
@@ -64,20 +65,20 @@ def _utf8_input(prompt: str = "") -> str:
 
 class ChatAgent:
 
-    def __init__(self, model: str, *, base_url: str = "", system_prompt: str = "", api_key: str = "", compress_threshold: int = 100000):
-        self._model = model
-        self._base_url = base_url
-        self._system_prompt = system_prompt
-        self._api_key = api_key
-        self._compress_threshold = compress_threshold
-        self._agent = None
+    def __init__(self, model: str, *, base_url: str = "", system_prompt: str = "", api_key: str = "", compress_threshold: int = 100000) -> None:
+        self._model: str = model
+        self._base_url: str = base_url
+        self._system_prompt: str = system_prompt
+        self._api_key: str = api_key
+        self._compress_threshold: int = compress_threshold
+        self._agent: Any = None
         self._reasoning_buf: list[str] = []
 
     @property
     def model(self) -> str:
         return self._model
 
-    def _ensure_agent(self):
+    def _ensure_agent(self) -> None:
         if self._agent is not None:
             return
         from agentframe import Agent as _Agent

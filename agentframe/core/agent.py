@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, Iterator, AsyncIterator
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import StateGraph, END
@@ -26,19 +26,19 @@ class Agent:
         api_key: str | None = None,
         base_url: str | None = None,
         **kwargs: Any,
-    ):
-        self.model = model
-        self.system_prompt = system_prompt
-        self.checkpointer = checkpointer
+    ) -> None:
+        self.model: str = model
+        self.system_prompt: str | None = system_prompt
+        self.checkpointer: BaseCheckpointSaver | None = checkpointer
 
-        self.llm_client = LLMClient(model, api_key=api_key, base_url=base_url, **kwargs)
+        self.llm_client: LLMClient = LLMClient(model, api_key=api_key, base_url=base_url, **kwargs)
 
-        self.tool_registry = ToolRegistry()
+        self.tool_registry: ToolRegistry = ToolRegistry()
         if tools:
             for t in tools:
                 self.tool_registry.register(t)
 
-        self.mcp_configs = mcp_configs or []
+        self.mcp_configs: list[dict] = mcp_configs or []
         self._mcp_clients: list | None = None
 
         self.compressor: Compressor | None = None
@@ -49,7 +49,7 @@ class Agent:
                 threshold=compress_threshold,
             )
 
-        self._graph = None
+        self._graph: Any = None
 
     # =============================================
     # Hooks – override in subclass for CLI etc.
@@ -72,7 +72,12 @@ class Agent:
     # Graph construction
     # ------------------------------------------------------------------
 
-    def _build_graph_impl(self, agent_node, tools_node, should_continue_fn) -> None:
+    def _build_graph_impl(
+        self,
+        agent_node: Callable[[AgentState], dict],
+        tools_node: Callable[[AgentState], dict],
+        should_continue_fn: Callable[[AgentState], str],
+    ) -> None:
         workflow = StateGraph(AgentState)
         workflow.add_node("agent", agent_node)
         workflow.add_node("tools", tools_node)
@@ -95,7 +100,7 @@ class Agent:
     # Shared helpers
     # ------------------------------------------------------------------
 
-    def _prepare_agent_state(self, state: AgentState) -> tuple[list, int, list[dict] | None]:
+    def _prepare_agent_state(self, state: AgentState) -> tuple[list[BaseMessage], int, list[dict] | None]:
         messages = list(state["messages"])
         total_tokens = state.get("total_tokens", 0)
         if self.compressor and total_tokens > self.compressor.threshold:
@@ -174,7 +179,7 @@ class Agent:
 
         return {"messages": messages, "total_tokens": total_tokens}
 
-    async def _prepare_agent_state_async(self, state: AgentState) -> tuple[list, int, list[dict] | None]:
+    async def _prepare_agent_state_async(self, state: AgentState) -> tuple[list[BaseMessage], int, list[dict] | None]:
         messages = list(state["messages"])
         total_tokens = state.get("total_tokens", 0)
         if self.compressor and total_tokens > self.compressor.threshold:
@@ -284,7 +289,7 @@ class Agent:
         input_text: str,
         *,
         session_id: str | None = None,
-    ):
+    ) -> Iterator[dict]:
         self._ensure_graph()
         config = self._make_config(session_id)
         for event in self._graph.stream(
@@ -297,7 +302,7 @@ class Agent:
         input_text: str,
         *,
         session_id: str | None = None,
-    ):
+    ) -> AsyncIterator[dict]:
         await self._aensure_graph()
         config = self._make_config(session_id)
         async for event in self._graph.astream(

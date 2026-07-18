@@ -4,11 +4,11 @@ from typing import Any
 
 
 class MCPTool:
-    def __init__(self, name: str, description: str, input_schema: dict, session: Any):
-        self.name = name
-        self.description = description
-        self.input_schema = input_schema
-        self._session = session
+    def __init__(self, name: str, description: str, input_schema: dict, session: Any) -> None:
+        self.name: str = name
+        self.description: str = description
+        self.input_schema: dict = input_schema
+        self._session: Any = session
 
     def to_openai_tool(self) -> dict:
         return {
@@ -30,11 +30,13 @@ class MCPTool:
 
 
 class MCPClient:
-    def __init__(self, config: dict):
-        self.config = config
-        self._session = None
-        self._exit_stack = None
+    def __init__(self, config: dict) -> None:
+        self.config: dict = config
+        self._session: Any = None
+        self._exit_stack: Any = None
         self._tools: dict[str, MCPTool] = {}
+        self._read: Any = None
+        self._write: Any = None
 
     async def connect(self) -> None:
         transport = self.config.get("transport", "stdio")
@@ -95,7 +97,7 @@ class MCPClient:
 
 
 class MCPManager:
-    def __init__(self):
+    def __init__(self) -> None:
         self.clients: list[MCPClient] = []
 
     def add_server(self, config: dict) -> None:

@@ -34,7 +34,7 @@ def _finish_tool_calls(tool_call_acc: dict[int, dict]) -> list[dict]:
     return tool_calls
 
 
-def _parse_tool_calls_from_message(msg) -> list[dict]:
+def _parse_tool_calls_from_message(msg: Any) -> list[dict]:
     tool_calls = []
     if hasattr(msg, "tool_calls") and msg.tool_calls:
         for tc in msg.tool_calls:
@@ -47,11 +47,11 @@ def _parse_tool_calls_from_message(msg) -> list[dict]:
     return tool_calls
 
 
-def _parse_completion_response(response) -> dict:
+def _parse_completion_response(response: Any) -> dict:
     msg = response.choices[0].message
     tool_calls = _parse_tool_calls_from_message(msg)
     ai_msg = AIMessage(content=msg.content or "", tool_calls=tool_calls or [])
-    usage = {}
+    usage: dict = {}
     if hasattr(response, "usage") and response.usage:
         usage = {
             "prompt_tokens": response.usage.prompt_tokens,
@@ -61,7 +61,7 @@ def _parse_completion_response(response) -> dict:
     return {"message": ai_msg, "usage": usage}
 
 
-def _process_stream_chunk(chunk, tool_call_acc: dict[int, dict]) -> list[dict]:
+def _process_stream_chunk(chunk: Any, tool_call_acc: dict[int, dict]) -> list[dict]:
     events: list[dict] = []
     delta = chunk.choices[0].delta
 
@@ -84,7 +84,7 @@ def _process_stream_chunk(chunk, tool_call_acc: dict[int, dict]) -> list[dict]:
     return events
 
 
-def _extract_stream_usage(response) -> dict:
+def _extract_stream_usage(response: Any) -> dict:
     if hasattr(response, "usage") and response.usage:
         return {
             "prompt_tokens": response.usage.prompt_tokens,
@@ -102,11 +102,11 @@ class LLMClient:
         api_key: str | None = None,
         base_url: str | None = None,
         **kwargs: Any,
-    ):
-        self.model = model
-        self.api_key = api_key
-        self.base_url = base_url
-        self.kwargs = kwargs
+    ) -> None:
+        self.model: str = model
+        self.api_key: str | None = api_key
+        self.base_url: str | None = base_url
+        self.kwargs: dict[str, Any] = kwargs
         self._client: openai.OpenAI | None = None
         self._aclient: openai.AsyncOpenAI | None = None
 

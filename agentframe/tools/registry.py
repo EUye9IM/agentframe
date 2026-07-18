@@ -6,7 +6,7 @@ from .function_tool import FunctionTool, function_tool
 
 
 class ToolRegistry:
-    def __init__(self):
+    def __init__(self) -> None:
         self._tools: dict[str, FunctionTool | dict] = {}
 
     def register(self, tool: FunctionTool | Callable | dict) -> None:
