@@ -82,6 +82,7 @@ class ChatAgent:
             return
         from agentframe import Agent as _Agent
         from agentframe.tools.builtin.bash import run_bash
+        from langgraph.checkpoint.memory import MemorySaver
 
         self._agent = _Agent(
             model=self._model,
@@ -89,6 +90,7 @@ class ChatAgent:
             api_key=self._api_key or None,
             base_url=self._base_url or None,
             compress_threshold=self._compress_threshold,
+            checkpointer=MemorySaver(),
             tools=[run_bash],
         )
         self._agent.on_llm_reasoning = self._on_reasoning
@@ -147,10 +149,10 @@ class ChatAgent:
 
     # ---- chat ----
 
-    async def chat(self, user_input: str, session_id: str | None = None) -> str:
+    async def chat(self, user_input: str) -> str:
         self._ensure_agent()
         self._reasoning_buf = []
-        return await self._agent.ainvoke(user_input, session_id=session_id)
+        return await self._agent.ainvoke(user_input, session_id="default")
 
     @classmethod
     def from_config(cls, cfg: dict) -> ChatAgent:

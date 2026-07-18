@@ -251,9 +251,9 @@ class Agent:
     def _build_input(self, input_text: str) -> dict:
         messages: list[BaseMessage] = []
         if self.system_prompt:
-            messages.append(SystemMessage(content=self.system_prompt))
+            messages.append(SystemMessage(content=self.system_prompt, id="system"))
         messages.append(HumanMessage(content=input_text))
-        return {"messages": messages, "total_tokens": 0}
+        return {"messages": messages}
 
     def invoke(
         self,
