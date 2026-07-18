@@ -1,15 +1,14 @@
 [project]
 name = "agentframe"
 version = "0.1.0"
-description = "A lightweight agent framework built on LangGraph and litellm"
+description = "A lightweight agent framework built on LangGraph and openai"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 dependencies = [
     "langgraph >= 0.2, < 2",
-    "litellm >= 1.60, < 2",
+    "openai >= 1.0, < 2",
     "langchain-core >= 0.3, < 2",
-    "fastapi >= 0.100, < 1",
 ]
 
 [project.optional-dependencies]

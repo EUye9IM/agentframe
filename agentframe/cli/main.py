@@ -64,8 +64,9 @@ def _utf8_input(prompt: str = "") -> str:
 
 class ChatAgent:
 
-    def __init__(self, model: str, *, system_prompt: str = "", api_key: str = "", compress_threshold: int = 100000):
+    def __init__(self, model: str, *, base_url: str = "", system_prompt: str = "", api_key: str = "", compress_threshold: int = 100000):
         self._model = model
+        self._base_url = base_url
         self._system_prompt = system_prompt
         self._api_key = api_key
         self._compress_threshold = compress_threshold
@@ -86,6 +87,7 @@ class ChatAgent:
             model=self._model,
             system_prompt=self._system_prompt or None,
             api_key=self._api_key or None,
+            base_url=self._base_url or None,
             compress_threshold=self._compress_threshold,
             tools=[run_bash],
         )
@@ -154,6 +156,7 @@ class ChatAgent:
     def from_config(cls, cfg: dict) -> ChatAgent:
         return cls(
             model=cfg["model"],
+            base_url=cfg.get("base_url", ""),
             system_prompt=cfg["system_prompt"],
             api_key=cfg["api_key"],
             compress_threshold=cfg["compress_threshold"],
@@ -165,8 +168,6 @@ class ChatAgent:
 # ---------------------------------------------------------------------------
 
 async def main_loop(agent: ChatAgent) -> None:
-    import litellm  # warm up — 4–5s one-time load
-
     print()
     print(f"  model: {agent.model}")
     print(f"  /quit to exit")

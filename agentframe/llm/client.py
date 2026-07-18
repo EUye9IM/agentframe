@@ -4,7 +4,7 @@ import json
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
-from litellm import completion, acompletion
+import openai
 from langchain_core.messages import (
     BaseMessage,
     SystemMessage,
@@ -49,15 +49,12 @@ def _build_kwargs(
     model: str,
     openai_messages: list[dict],
     tools: list[dict] | None = None,
-    api_key: str | None = None,
     **extra: Any,
 ) -> dict:
     kwargs: dict = {"model": model, "messages": openai_messages}
     kwargs.update(extra)
     if tools:
         kwargs["tools"] = tools
-    if api_key:
-        kwargs["api_key"] = api_key
     return kwargs
 
 
@@ -134,28 +131,48 @@ def _extract_stream_usage(response) -> dict:
 
 
 class LLMClient:
-    def __init__(self, model: str, api_key: str | None = None, **kwargs: Any):
+    def __init__(
+        self,
+        model: str,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        **kwargs: Any,
+    ):
         self.model = model
         self.api_key = api_key
+        self.base_url = base_url
         self.kwargs = kwargs
+        self._client: openai.OpenAI | None = None
+        self._aclient: openai.AsyncOpenAI | None = None
+
+    def _get_client(self) -> openai.OpenAI:
+        if self._client is None:
+            self._client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url)
+        return self._client
+
+    def _get_aclient(self) -> openai.AsyncOpenAI:
+        if self._aclient is None:
+            self._aclient = openai.AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+        return self._aclient
 
     def invoke(self, messages: list[BaseMessage], tools: list[dict] | None = None) -> dict:
         openai_messages = _convert_messages(messages)
-        kwargs = _build_kwargs(self.model, openai_messages, tools, self.api_key, **self.kwargs)
-        response = completion(**kwargs)
+        kwargs = _build_kwargs(self.model, openai_messages, tools, **self.kwargs)
+        response = self._get_client().chat.completions.create(**kwargs)
         return _parse_completion_response(response)
 
     async def ainvoke(self, messages: list[BaseMessage], tools: list[dict] | None = None) -> dict:
         openai_messages = _convert_messages(messages)
-        kwargs = _build_kwargs(self.model, openai_messages, tools, self.api_key, **self.kwargs)
-        response = await acompletion(**kwargs)
+        kwargs = _build_kwargs(self.model, openai_messages, tools, **self.kwargs)
+        response = await self._get_aclient().chat.completions.create(**kwargs)
         return _parse_completion_response(response)
 
     def stream(self, messages: list[BaseMessage], tools: list[dict] | None = None) -> Iterator[dict]:
         openai_messages = _convert_messages(messages)
-        kwargs = _build_kwargs(self.model, openai_messages, tools, self.api_key, **self.kwargs)
+        kwargs = _build_kwargs(self.model, openai_messages, tools, **self.kwargs)
         kwargs["stream"] = True
-        response = completion(**kwargs)
+        response = self._get_client().chat.completions.create(**kwargs)
 
         tool_call_acc: dict[int, dict] = {}
         for chunk in response:
@@ -166,9 +183,9 @@ class LLMClient:
 
     async def astream(self, messages: list[BaseMessage], tools: list[dict] | None = None) -> AsyncIterator[dict]:
         openai_messages = _convert_messages(messages)
-        kwargs = _build_kwargs(self.model, openai_messages, tools, self.api_key, **self.kwargs)
+        kwargs = _build_kwargs(self.model, openai_messages, tools, **self.kwargs)
         kwargs["stream"] = True
-        response = await acompletion(**kwargs)
+        response = await self._get_aclient().chat.completions.create(**kwargs)
 
         tool_call_acc: dict[int, dict] = {}
         async for chunk in response:

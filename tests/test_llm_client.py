@@ -12,7 +12,6 @@ from agentframe.llm.client import LLMClient
 
 
 def _make_mock_response(content="ok", tool_calls=None):
-    """Create a mocked litellm response object."""
     choice = MagicMock()
     choice.message.content = content
     choice.message.tool_calls = tool_calls
@@ -26,13 +25,15 @@ class TestLLMClientMessageConversion:
 
     def _capture_kwargs(self, messages, tools=None):
         client = LLMClient(model="gpt-4o")
-        with patch("agentframe.llm.client.completion") as mock:
-            mock.return_value = _make_mock_response()
+        with patch.object(client, "_get_client") as mock_get:
+            mock_openai = MagicMock()
+            mock_openai.chat.completions.create.return_value = _make_mock_response()
+            mock_get.return_value = mock_openai
             try:
                 client.invoke(messages, tools=tools)
             except Exception:
                 pass
-            return mock.call_args[1]
+            return mock_openai.chat.completions.create.call_args[1]
 
     def test_system_message(self):
         kwargs = self._capture_kwargs([SystemMessage(content="You are a bot")])
@@ -92,20 +93,20 @@ class TestLLMClientMessageConversion:
 
     def test_model_passed(self):
         client = LLMClient(model="gpt-4o-mini")
-        with patch("agentframe.llm.client.completion") as mock:
-            mock.return_value = _make_mock_response()
+        with patch.object(client, "_get_client") as mock_get:
+            mock_openai = MagicMock()
+            mock_openai.chat.completions.create.return_value = _make_mock_response()
+            mock_get.return_value = mock_openai
             try:
                 client.invoke([HumanMessage(content="hi")])
             except Exception:
                 pass
-            assert mock.call_args[1]["model"] == "gpt-4o-mini"
+            assert mock_openai.chat.completions.create.call_args[1]["model"] == "gpt-4o-mini"
 
-    def test_api_key_passed(self):
+    def test_api_key_stored_on_client(self):
         client = LLMClient(model="gpt-4o", api_key="sk-test")
-        with patch("agentframe.llm.client.completion") as mock:
-            mock.return_value = _make_mock_response()
-            try:
-                client.invoke([HumanMessage(content="hi")])
-            except Exception:
-                pass
-            assert mock.call_args[1]["api_key"] == "sk-test"
+        assert client.api_key == "sk-test"
+
+    def test_base_url_stored_on_client(self):
+        client = LLMClient(model="gpt-4o", base_url="https://api.example.com/v1")
+        assert client.base_url == "https://api.example.com/v1"

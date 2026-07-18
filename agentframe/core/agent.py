@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any, Callable
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -25,13 +24,14 @@ class Agent:
         compress_threshold: int | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
         api_key: str | None = None,
+        base_url: str | None = None,
         **kwargs: Any,
     ):
         self.model = model
         self.system_prompt = system_prompt
         self.checkpointer = checkpointer
 
-        self.llm_client = LLMClient(model, api_key=api_key, **kwargs)
+        self.llm_client = LLMClient(model, api_key=api_key, base_url=base_url, **kwargs)
 
         self.tool_registry = ToolRegistry()
         if tools:

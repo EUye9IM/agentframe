@@ -6,7 +6,8 @@ from pathlib import Path
 
 DEFAULT_CONFIG_PATH = Path.home() / ".afcli.toml"
 
-DEFAULT_CONFIG = """model = "deepseek/deepseek-v4-flash"
+DEFAULT_CONFIG = """model = "gpt-4o"
+base_url = ""
 system_prompt = "You are a helpful assistant."
 api_key = ""
 compress_threshold = 100000
@@ -25,6 +26,7 @@ def load_config(path: Path | None = None) -> dict:
     config = tomllib.loads(raw.decode())
 
     config.setdefault("model", "gpt-4o")
+    config.setdefault("base_url", "")
     config.setdefault("system_prompt", "You are a helpful assistant.")
     config.setdefault("api_key", "")
     config.setdefault("compress_threshold", 100000)
