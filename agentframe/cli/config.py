@@ -20,7 +20,7 @@ def load_config(path: Path | None = None) -> dict:
     if not config_path.exists():
         config_path.write_text(DEFAULT_CONFIG)
         print(f"[config] Created default config at {config_path}")
-        print(f"[config] Edit it and set your api_key or model.")
+        print("[config] Edit it and set your api_key or model.")
 
     raw = config_path.read_bytes()
     config = tomllib.loads(raw.decode())

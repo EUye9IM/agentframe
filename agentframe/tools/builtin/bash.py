@@ -5,7 +5,7 @@ import subprocess
 from agentframe import function_tool
 
 
-@function_tool(name="bash", description="Execute a bash command. Returns stdout+stderr. Use for file ops, git, grep, ls, etc.")
+@function_tool(name="bash", description="Execute a bash command. Returns stdout+stderr. Use for file ops, git, grep, ls, etc.")  # type: ignore[reportCallIssue]
 def run_bash(command: str) -> str:
     try:
         result = subprocess.run(

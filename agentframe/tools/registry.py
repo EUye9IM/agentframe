@@ -21,7 +21,7 @@ class ToolRegistry:
                 raise ValueError("dict tool must have 'function.name' field")
             self._tools[name] = tool
         else:
-            raise TypeError(f"Unsupported tool type: {type(tool)}")
+            raise TypeError(f"Unsupported tool type: {type(tool)}")  # type: ignore[unreachable]
 
     @property
     def tools(self) -> dict[str, FunctionTool | dict]:

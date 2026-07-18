@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable, get_type_hints
+from typing import Any, Callable, overload, get_type_hints
 
 _type_map: dict[type, str] = {
     str: "string",
@@ -25,7 +25,6 @@ class FunctionTool:
         self.name: str = name or func.__name__
         self.description: str = description or (func.__doc__ or "").strip()
         self.openai_tool: dict = self._build_schema()
-
 
     def _build_schema(self) -> dict:
         sig = inspect.signature(self.func)
@@ -65,6 +64,22 @@ class FunctionTool:
         except Exception as e:
             return f"Error: {e}"
 
+
+@overload
+def function_tool(
+    func: Callable,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+) -> FunctionTool: ...
+
+@overload
+def function_tool(
+    func: None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+) -> Callable[[Callable], FunctionTool]: ...
 
 def function_tool(
     func: Callable | None = None,

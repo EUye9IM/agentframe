@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import AsyncExitStack
 from typing import Any
 
 
@@ -40,12 +41,7 @@ class MCPClient:
 
     async def connect(self) -> None:
         transport = self.config.get("transport", "stdio")
-        try:
-            from mcp import ClientSession
-        except ImportError:
-            raise ImportError("MCP support requires: pip install mcp")
-
-        import anyio
+        from mcp import ClientSession
 
         if transport == "stdio":
             from mcp.client.stdio import stdio_client, StdioServerParameters
@@ -54,7 +50,7 @@ class MCPClient:
             args = self.config.get("args", [])
             server_params = StdioServerParameters(command=command, args=args)
 
-            self._exit_stack = anyio.AsyncExitStack()
+            self._exit_stack = AsyncExitStack()
             transport_ctx = stdio_client(server_params)
             self._read, self._write = await self._exit_stack.enter_async_context(transport_ctx)
 
@@ -63,7 +59,7 @@ class MCPClient:
 
             url = self.config["url"]
 
-            self._exit_stack = anyio.AsyncExitStack()
+            self._exit_stack = AsyncExitStack()
             transport_ctx = sse_client(url)
             self._read, self._write = await self._exit_stack.enter_async_context(transport_ctx)
         else:

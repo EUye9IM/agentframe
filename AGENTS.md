@@ -13,7 +13,7 @@ Package manager is **uv**, not pip. The `uv.lock` file is checked in and authori
 ## Run / Verify
 
 ```bash
-# All tests (mock-based, no API key needed) — 55 tests
+# All tests (mock-based, no API key needed) — 62 tests
 .venv/bin/python -m pytest tests/ -v
 
 # CLI (interactive)
@@ -27,12 +27,12 @@ afcli
 ```
 agentframe/
   core/agent.py    # Agent class + 4 hooks + LangGraph StateGraph
-  llm/client.py    # litellm wrapper: invoke, ainvoke, stream, astream
+  llm/client.py    # openai wrapper: invoke, ainvoke, stream, astream
   tools/           # function_tool decorator, ToolRegistry, MCP client
   compression/     # Token-threshold summarization (Compressor: compress + acompress)
   memory/hooks.py  # doc-only: users pass langgraph BaseCheckpointSaver
   cli/             # ChatAgent, ~/.afcli.toml config, UTF-8 input
-tests/             # 55 tests: test_agent.py, test_agent_async.py, test_tools.py, etc.
+tests/             # 62 tests across 7 files
 ```
 
 The CLI does NOT use the LangGraph `StateGraph`. It calls `agent.ainvoke()` which routes through `_acall_agent` → `llm_client.astream` → hooks fire per token. The graph is for library users calling `invoke()`/`ainvoke()`/`stream()`/`astream()`.
@@ -67,8 +67,8 @@ Default implementations are no-ops. All four fire in both sync and async paths.
 
 ### Patch rules
 
-- **Agent tests**: `patch.object(agent.llm_client, "invoke", ...)` or `patch.object(agent.llm_client, "astream", ...)`. Do NOT use `patch("litellm.completion")` — imported symbol aliasing breaks patching.
-- **LLMClient tests**: patch `"agentframe.llm.client.completion"` (the bound module-level reference).
+- **Agent tests**: `patch.object(agent.llm_client, "invoke", ...)` or `patch.object(agent.llm_client, "astream", ...)`. Do NOT patch `openai` module-level — always patch on the instance.
+- **LLMClient tests**: `patch.object(client, "_get_client")` / `patch.object(client, "_get_aclient")` to mock the inner `openai` client.
 
 ### Mocking `astream` for async tests
 
@@ -85,11 +85,24 @@ def _make_astream(*event_lists):
 
 Conftest provides `make_response()` and `make_tool_call()` helpers. Both async and sync paths have test coverage (`test_agent.py` + `test_agent_async.py`).
 
+## Linting
+
+代码修改完成后，运行基于 pyright 检查：
+
+```bash
+.venv/bin/basedpyright agentframe/
+```
+
+- 可修复的告警/报错直接修复
+- 修复代价大或无法修复的，在行末加 `# type: ignore[<error-code>]` 屏蔽（如 `# type: ignore[arg-type]`、`# type: ignore[reportMissingImports]`）
+- 防御性代码（如类型标注保证安全但仍保留的运行时检查）导致的告警也可用 `# type: ignore[unreachable]` 屏蔽
+- 可选依赖导致的导入错误使用 `# type: ignore[reportMissingImports]` 屏蔽
+
 ## Known Quirks
 
-- **litellm import is slow (4–5s)**: one-time cost paid at CLI startup. Pytest sessions also pay this cost.
-- **LSP import errors**: LSP runs outside the venv, so `langchain_core`/`litellm`/`langgraph` imports show as unresolved. Ignore them.
-- **`fastapi` is a core dependency**: litellm 1.92.0 imports `fastapi` internally when tools are passed to `completion()`. Do not remove it from pyproject.toml.
+- **LSP import errors**: LSP runs outside the venv, so `langchain_core`/`openai`/`langgraph` imports show as unresolved. Ignore them.
+- **`base_url` support**: `LLMClient` accepts `base_url` for custom endpoints (Ollama, vLLM, etc.). Pass it to `Agent` and it flows through to `openai.OpenAI(base_url=...)`.
+- **basedpyright false positive**: `_build_graph_impl` parameter types (`Callable[[AgentState], dict]`) cause a false-positive error on `workflow.add_node("agent", agent_node)` because LangGraph's `StateNode` Protocol expects `state` as a keyword param. Code runs correctly; this is a LangGraph type-stub limitation.
 - **Config file**: `~/.afcli.toml` auto-created on first CLI run. `api_key` defaults to `""` — set it or use `LLM_AUTH_KEY` / `OPENAI_API_KEY` env var.
 - **Session persistence**: pass `session_id="name"` to `invoke()`/`ainvoke()`. Must also pass a `checkpointer` (e.g. `MemorySaver` or `SqliteSaver`) when constructing Agent.
 - **CLI builtin tools**: The CLI auto-registers `bash` tool (`agentframe/tools/builtin/bash.py`).

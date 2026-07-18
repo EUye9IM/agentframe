@@ -79,8 +79,8 @@ class Agent:
         should_continue_fn: Callable[[AgentState], str],
     ) -> None:
         workflow = StateGraph(AgentState)
-        workflow.add_node("agent", agent_node)
-        workflow.add_node("tools", tools_node)
+        workflow.add_node("agent", agent_node)  # type: ignore[arg-type]
+        workflow.add_node("tools", tools_node)  # type: ignore[arg-type]
         workflow.set_entry_point("agent")
         workflow.add_conditional_edges(
             "agent",
@@ -94,7 +94,7 @@ class Agent:
         self._build_graph_impl(self._call_agent, self._call_tools, self._should_continue)
 
     async def _abuild_graph(self) -> None:
-        self._build_graph_impl(self._acall_agent, self._acall_tools, self._ashould_continue)
+        self._build_graph_impl(self._acall_agent, self._acall_tools, self._ashould_continue)  # type: ignore[arg-type]
 
     # ------------------------------------------------------------------
     # Shared helpers
@@ -112,7 +112,7 @@ class Agent:
     def _process_tool_calls(
         self, messages: list, last_message: AIMessage
     ) -> tuple[list[dict], list]:
-        approved = self.on_tool_call(last_message.tool_calls)
+        approved = self.on_tool_call(last_message.tool_calls)  # type: ignore[arg-type]
         approved_ids = {tc["id"] for tc in approved}
         for tc in last_message.tool_calls:
             if tc["id"] not in approved_ids:
@@ -222,6 +222,7 @@ class Agent:
 
     async def _call_mcp_tool(self, name: str, args: dict) -> str:
         await self._ensure_mcp_connected()
+        assert self._mcp_clients is not None
         last_error: Exception | None = None
         for client in self._mcp_clients:
             try:
@@ -233,7 +234,7 @@ class Agent:
         return f"Error: MCP tool '{name}' not found"
 
     async def aclose_mcp(self) -> None:
-        if self._mcp_clients:
+        if self._mcp_clients is not None:
             for client in self._mcp_clients:
                 await client.close()
             self._mcp_clients = None
