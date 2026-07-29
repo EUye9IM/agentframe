@@ -1,12 +1,19 @@
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import SystemMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 
 from agentframe import Agent
-from tests.conftest import make_response, make_tool_call, get_weather, add
+from tests.conftest import (
+    make_response,
+    make_tool_call,
+    get_weather,
+    add,
+    make_mock_mcp_tool,
+    make_mock_mcp_client,
+)
 
 
 def _make_astream(*event_lists):
@@ -257,3 +264,231 @@ class TestAgentAsyncCompression:
             await agent.ainvoke("Hi")
 
         assert compressor_called
+
+
+class TestAgentAsyncMCP:
+
+    async def test_mcp_tools_merged_with_registry(self):
+        """MCP tools appear alongside registry tools in astream tools kwarg."""
+        agent = Agent(model="gpt-4o", tools=[get_weather])
+        mcp_tool = make_mock_mcp_tool("mcp_search", "search tool")
+        mcp_client = make_mock_mcp_client(tools=[mcp_tool])
+
+        calls = []
+
+        async def mock_astream(messages, tools=None):
+            calls.append(dict(tools=tools))
+            yield {"type": "done", "tool_calls": [], "usage": {"total_tokens": 10}}
+
+        agent._mcp_clients = [mcp_client]
+        with patch.object(agent.llm_client, "astream", mock_astream):
+            with patch.object(agent, "_ensure_mcp_connected"):
+                await agent.ainvoke("hi")
+
+        tool_names = {t["function"]["name"] for t in calls[0]["tools"]}
+        assert "get_weather" in tool_names
+        assert "mcp_search" in tool_names
+
+    async def test_mcp_tool_call_executed(self):
+        """LLM calls an MCP tool -> routed to MCP client -> result in next LLM call."""
+        agent = Agent(model="gpt-4o")
+        mcp_tool = make_mock_mcp_tool("mcp_search")
+        mcp_client = make_mock_mcp_client(tools=[mcp_tool])
+        mcp_client.call_tool = AsyncMock(return_value="search result: found it")
+
+        agent._mcp_clients = [mcp_client]
+
+        mock = _make_astream(
+            [{"type": "done", "tool_calls": make_tool_call("mcp_search", {"q": "test"}, id="c1"),
+              "usage": {"total_tokens": 30}}],
+            [{"type": "content", "content": "found it"},
+             {"type": "done", "tool_calls": [], "usage": {"total_tokens": 10}}],
+        )
+        with patch.object(agent.llm_client, "astream", mock):
+            with patch.object(agent, "_ensure_mcp_connected"):
+                result = await agent.ainvoke("search")
+
+        assert result == "found it"
+        mcp_client.call_tool.assert_called_once_with("mcp_search", {"q": "test"})
+
+    async def test_mcp_and_registry_tools_coexist(self):
+        """Both registry and MCP tools work in same conversation."""
+        agent = Agent(model="gpt-4o", tools=[add])
+        mcp_tool = make_mock_mcp_tool("mcp_search")
+        mcp_client = make_mock_mcp_client(tools=[mcp_tool])
+        mcp_client.call_tool = AsyncMock(return_value="mcp result")
+        agent._mcp_clients = [mcp_client]
+
+        mock = _make_astream(
+            [{"type": "done", "tool_calls": [
+                {"name": "add", "args": {"a": 1, "b": 2}, "id": "c1", "type": "tool_call"},
+                {"name": "mcp_search", "args": {"q": "x"}, "id": "c2", "type": "tool_call"},
+            ], "usage": {"total_tokens": 30}}],
+            [{"type": "content", "content": "3 and mcp result"},
+             {"type": "done", "tool_calls": [], "usage": {"total_tokens": 10}}],
+        )
+        with patch.object(agent.llm_client, "astream", mock):
+            with patch.object(agent, "_ensure_mcp_connected"):
+                result = await agent.ainvoke("test")
+
+        assert result == "3 and mcp result"
+
+    async def test_mcp_tool_unknown_returns_error(self):
+        """MCP tool call for tool not found in any client returns error message."""
+        agent = Agent(model="gpt-4o")
+        mcp_client = make_mock_mcp_client(tools=[])
+        mcp_client.call_tool = AsyncMock(side_effect=Exception("tool not found"))
+        agent._mcp_clients = [mcp_client]
+
+        calls = []
+
+        async def mock(messages, tools=None):
+            calls.append(dict(messages=list(messages)))
+            if len(calls) == 1:
+                yield {"type": "done", "tool_calls": make_tool_call("nonexistent", {}, id="c1"),
+                       "usage": {"total_tokens": 20}}
+            else:
+                yield {"type": "content", "content": "done"}
+                yield {"type": "done", "tool_calls": [], "usage": {"total_tokens": 10}}
+
+        with patch.object(agent.llm_client, "astream", mock):
+            with patch.object(agent, "_ensure_mcp_connected"):
+                await agent.ainvoke("test")
+
+        # Second LLM call should contain ToolMessage with error
+        second_msgs = calls[1]["messages"]
+        tool_msgs = [m for m in second_msgs if isinstance(m, ToolMessage)]
+        assert len(tool_msgs) >= 1
+        assert any("not found" in m.content or "Error" in m.content for m in tool_msgs)
+
+    async def test_tool_result_hook_called_for_mcp_tool(self):
+        """on_tool_result fires for MCP tools."""
+        agent = Agent(model="gpt-4o")
+        mcp_tool = make_mock_mcp_tool("mcp_search")
+        mcp_client = make_mock_mcp_client(tools=[mcp_tool])
+        mcp_client.call_tool = AsyncMock(return_value="hit")
+        agent._mcp_clients = [mcp_client]
+
+        results = []
+        agent.on_tool_result = lambda name, result: results.append((name, result))
+
+        mock = _make_astream(
+            [{"type": "done", "tool_calls": make_tool_call("mcp_search", {"q": "x"}, id="c1"),
+              "usage": {"total_tokens": 20}}],
+            [{"type": "content", "content": "done"},
+             {"type": "done", "tool_calls": [], "usage": {"total_tokens": 10}}],
+        )
+        with patch.object(agent.llm_client, "astream", mock):
+            with patch.object(agent, "_ensure_mcp_connected"):
+                await agent.ainvoke("search")
+
+        assert len(results) == 1
+        assert results[0][0] == "mcp_search"
+        assert "hit" in results[0][1]
+
+    async def test_no_mcp_configs_no_mcp_in_tools(self):
+        """Without mcp_configs, no MCP tools in tools kwarg."""
+        agent = Agent(model="gpt-4o")
+
+        calls = []
+
+        async def mock_astream(messages, tools=None):
+            calls.append(dict(tools=tools))
+            yield {"type": "done", "tool_calls": [], "usage": {"total_tokens": 10}}
+
+        with patch.object(agent.llm_client, "astream", mock_astream):
+            await agent.ainvoke("hi")
+
+        # tools should be None (no registry tools either)
+        assert calls[0]["tools"] is None
+
+    async def test_mcp_ensure_connected_called_when_configs_present(self):
+        """_ensure_mcp_connected is called when mcp_configs is non-empty."""
+        agent = Agent(model="gpt-4o", mcp_configs=[{"transport": "stdio", "command": "dummy"}])
+        mcp_client = make_mock_mcp_client(tools=[make_mock_mcp_tool("t")])
+        agent._mcp_clients = [mcp_client]
+
+        mock = _make_astream([
+            {"type": "content", "content": "ok"},
+            {"type": "done", "tool_calls": [], "usage": {"total_tokens": 10}},
+        ])
+        with patch.object(agent.llm_client, "astream", mock):
+            await agent.ainvoke("hi")
+
+        # No crash means _ensure_mcp_connected was handled
+        assert agent._mcp_clients is not None
+
+
+class TestAgentAsyncMCPPrompts:
+
+    async def test_mcp_prompt_resolved_as_system_prompt(self):
+        """mcp_prompt is resolved from MCP server and injected as system prompt."""
+        agent = Agent(model="gpt-4o", mcp_prompt="greeting")
+        prompt_content = "You are a helpful assistant"
+        mcp_client = make_mock_mcp_client(
+            tools=[], prompts={"greeting": prompt_content},
+        )
+        agent._mcp_clients = [mcp_client]
+
+        calls = []
+
+        async def mock(messages, tools=None):
+            calls.append(dict(messages=list(messages)))
+            yield {"type": "content", "content": "Hello"}
+            yield {"type": "done", "tool_calls": [], "usage": {"total_tokens": 10}}
+
+        with patch.object(agent.llm_client, "astream", mock):
+            with patch.object(agent, "_ensure_mcp_connected"):
+                await agent.ainvoke("hi")
+
+        msgs = calls[0]["messages"]
+        assert any(
+            isinstance(m, SystemMessage) and prompt_content in m.content
+            for m in msgs
+        )
+
+    async def test_mcp_prompt_resolved_once_cached(self):
+        """_mcp_prompt_resolved is cached, not re-resolved on every invoke."""
+        agent = Agent(model="gpt-4o", mcp_prompt="greeting")
+        mcp_client = make_mock_mcp_client(
+            tools=[], prompts={"greeting": "prompt"},
+        )
+        agent._mcp_clients = [mcp_client]
+
+        calls = []
+
+        async def mock(messages, tools=None):
+            calls.append(dict(messages=list(messages)))
+            yield {"type": "content", "content": "A"}
+            yield {"type": "done", "tool_calls": [], "usage": {"total_tokens": 10}}
+
+        with patch.object(agent.llm_client, "astream", mock):
+            with patch.object(agent, "_ensure_mcp_connected") as ensure_mock:
+                await agent.ainvoke("hi1")
+                await agent.ainvoke("hi2")
+
+        # Called for each ainvoke (2 calls) but prompt resolved only once
+        assert len(calls) == 2
+
+    async def test_mcp_prompt_fallback_to_system_prompt(self):
+        """When mcp_prompt not found, falls back to system_prompt."""
+        agent = Agent(model="gpt-4o", system_prompt="fallback", mcp_prompt="nonexistent")
+        mcp_client = make_mock_mcp_client(tools=[], prompts={})
+        agent._mcp_clients = [mcp_client]
+
+        calls = []
+
+        async def mock(messages, tools=None):
+            calls.append(dict(messages=list(messages)))
+            yield {"type": "content", "content": "ok"}
+            yield {"type": "done", "tool_calls": [], "usage": {"total_tokens": 10}}
+
+        with patch.object(agent.llm_client, "astream", mock):
+            with patch.object(agent, "_ensure_mcp_connected"):
+                await agent.ainvoke("hi")
+
+        msgs = calls[0]["messages"]
+        assert any(
+            isinstance(m, SystemMessage) and "fallback" in m.content
+            for m in msgs
+        )

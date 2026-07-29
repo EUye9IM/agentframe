@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 from langchain_core.messages import AIMessage
 
@@ -36,3 +37,29 @@ def get_weather(city: str) -> str:
 @function_tool
 def add(a: int, b: int) -> int:
     return a + b
+
+
+def make_mock_mcp_tool(name: str, description: str = "", parameters: dict | None = None) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": parameters or {"type": "object", "properties": {}, "required": []},
+        },
+    }
+
+
+def make_mock_mcp_client(tools: list[dict] | None = None, prompts: dict[str, str] | None = None) -> MagicMock:
+    client = MagicMock()
+    client.get_openai_tools.return_value = tools or []
+    prompts = prompts or {}
+
+    async def get_prompt(name: str, args: dict | None = None) -> str:
+        if name not in prompts:
+            raise KeyError(f"MCP prompt '{name}' not found")
+        return prompts[name]
+
+    client.get_prompt = get_prompt
+    client.prompts = {n: MagicMock() for n in prompts}
+    return client

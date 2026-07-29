@@ -30,6 +30,38 @@ class MCPTool:
         return "\n".join(text_parts) if text_parts else str(result.content)
 
 
+class MCPPrompt:
+    def __init__(self, name: str, description: str, arguments: list[dict], session: Any) -> None:
+        self.name: str = name
+        self.description: str = description
+        self.arguments: list[dict] = arguments
+        self._session: Any = session
+
+    async def render(self, args: dict[str, Any] | None = None) -> str:
+        result = await self._session.get_prompt(self.name, args or {})
+        parts: list[str] = []
+        for msg in result.messages:
+            parts.append(f"[{msg.role}]\n{msg.content.text}")
+        return "\n\n".join(parts)
+
+    def to_openai_tool(self) -> dict:
+        return {
+            "type": "function",
+            "function": {
+                "name": f"__prompt_{self.name}",
+                "description": f"MCP Prompt: {self.description}",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        a["name"]: {"type": "string", "description": a.get("description", "")}
+                        for a in self.arguments
+                    },
+                    "required": [a["name"] for a in self.arguments if a.get("required", False)],
+                },
+            },
+        }
+
+
 class MCPClient:
     def __init__(self, config: dict) -> None:
         self.config: dict = config
@@ -79,12 +111,35 @@ class MCPClient:
             )
             self._tools[tool.name] = mcp_tool
 
+        try:
+            prompts_result = await self._session.list_prompts()
+            self._prompts: dict[str, MCPPrompt] = {
+                p.name: MCPPrompt(
+                    name=p.name,
+                    description=p.description or "",
+                    arguments=p.arguments or [],
+                    session=self._session,
+                )
+                for p in prompts_result.prompts
+            }
+        except Exception:
+            self._prompts = {}
+
     async def close(self) -> None:
         if self._exit_stack:
             await self._exit_stack.aclose()
 
+    @property
+    def prompts(self) -> dict[str, MCPPrompt]:
+        return getattr(self, "_prompts", {})
+
     def get_openai_tools(self) -> list[dict]:
         return [tool.to_openai_tool() for tool in self._tools.values()]
+
+    async def get_prompt(self, name: str, args: dict[str, Any] | None = None) -> str:
+        if name not in self.prompts:
+            raise KeyError(f"MCP prompt '{name}' not found")
+        return await self.prompts[name].render(args)
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
         if name not in self._tools:

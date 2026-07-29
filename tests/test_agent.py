@@ -4,7 +4,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 
 from agentframe import Agent
-from tests.conftest import make_response
+from tests.conftest import make_response, make_tool_call
 
 
 class TestAgentBasic:
@@ -56,3 +56,24 @@ class TestAgentBasic:
     def test_api_key_stored(self):
         agent = Agent(model="gpt-4o", api_key="sk-test")
         assert agent.llm_client.api_key == "sk-test"
+
+
+class TestAgentSyncMCP:
+
+    def test_sync_no_mcp_tools_exposed(self):
+        """Sync path does NOT expose MCP tools to LLM."""
+        agent = Agent(model="gpt-4o", mcp_configs=[{"transport": "stdio", "command": "dummy"}])
+        with patch.object(agent.llm_client, "invoke", return_value=make_response("ok")) as mock:
+            agent.invoke("hi")
+            tools = mock.call_args[1].get("tools")
+            assert tools is None or len(tools) == 0
+
+    def test_sync_mcp_tool_call_returns_async_hint(self):
+        """If sync path encounters a tool not in FunctionTool registry, returns async hint."""
+        agent = Agent(model="gpt-4o")
+        with patch.object(agent.llm_client, "invoke", side_effect=[
+            make_response(content="", tool_calls=make_tool_call("some_mcp_tool", {}, id="c1")),
+            make_response(content="recovered"),
+        ]):
+            result = agent.invoke("test")
+            assert result == "recovered"

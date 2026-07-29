@@ -34,7 +34,7 @@ class ToolRegistry:
         if isinstance(tool, FunctionTool):
             return tool.call(**args)
         if isinstance(tool, dict):
-            return f"MCP tool '{name}' called with {args}"
+            return f"Error: tool '{name}' not available in sync mode (use async)"
         return f"Error: unknown tool type for '{name}'"
 
     def get_openai_tools(self) -> list[dict]:

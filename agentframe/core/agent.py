@@ -21,6 +21,7 @@ class Agent:
         system_prompt: str | None = None,
         tools: list[FunctionTool | Callable | dict] | None = None,
         mcp_configs: list[dict] | None = None,
+        mcp_prompt: str | None = None,
         compress_threshold: int | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
         api_key: str | None = None,
@@ -40,6 +41,8 @@ class Agent:
 
         self.mcp_configs: list[dict] = mcp_configs or []
         self._mcp_clients: list | None = None
+        self.mcp_prompt: str | None = mcp_prompt
+        self._mcp_prompt_resolved: str | None = None
 
         self.compressor: Compressor | None = None
         if compress_threshold is not None:
@@ -141,7 +144,11 @@ class Agent:
 
         approved, messages = self._process_tool_calls(messages, last_message)
         for tc in approved:
-            result = self.tool_registry.call(tc["name"], tc["args"])
+            tool = self.tool_registry.tools.get(tc["name"])
+            if isinstance(tool, FunctionTool):
+                result = tool.call(**tc["args"])
+            else:
+                result = f"Error: tool '{tc['name']}' requires async (use ainvoke/astream)"
             self.on_tool_result(tc["name"], str(result))
             messages.append(
                 ToolMessage(content=str(result), tool_call_id=tc["id"])
@@ -185,8 +192,12 @@ class Agent:
         if self.compressor and total_tokens > self.compressor.threshold:
             messages = await self.compressor.acompress(messages)
             total_tokens = 0
-        tools = self.tool_registry.get_openai_tools() or None
-        return messages, total_tokens, tools
+        tools: list[dict] = self.tool_registry.get_openai_tools() or []
+        if self.mcp_configs or self._mcp_clients:
+            await self._ensure_mcp_connected()
+            for client in self._mcp_clients:
+                tools.extend(client.get_openai_tools())
+        return messages, total_tokens, tools or None
 
     async def _acall_tools(self, state: AgentState) -> dict:
         messages = list(state["messages"])
@@ -198,10 +209,12 @@ class Agent:
         approved, messages = self._process_tool_calls(messages, last_message)
         for tc in approved:
             tool = self.tool_registry.tools.get(tc["name"])
-            if isinstance(tool, dict):
+            if isinstance(tool, FunctionTool):
+                result = tool.call(**tc["args"])
+            elif self._mcp_clients:
                 result = await self._call_mcp_tool(tc["name"], tc["args"])
             else:
-                result = self.tool_registry.call(tc["name"], tc["args"])
+                result = f"Error: tool '{tc['name']}' not found"
             self.on_tool_result(tc["name"], str(result))
             messages.append(
                 ToolMessage(content=str(result), tool_call_id=tc["id"])
@@ -254,9 +267,35 @@ class Agent:
         if self._graph is None:
             await self._abuild_graph()
 
+    async def _resolve_mcp_prompt(self) -> None:
+        if not self.mcp_prompt or self._mcp_prompt_resolved is not None:
+            return
+        await self._ensure_mcp_connected()
+        parts = self.mcp_prompt.split(":", 1)
+        if len(parts) == 2:
+            server_key, prompt_name = parts
+            for client in self._mcp_clients:
+                cfg = client.config
+                if cfg.get("command") == server_key or cfg.get("url") == server_key:
+                    try:
+                        self._mcp_prompt_resolved = await client.get_prompt(prompt_name)
+                        return
+                    except KeyError:
+                        continue
+        else:
+            prompt_name = self.mcp_prompt
+            for client in self._mcp_clients:
+                try:
+                    self._mcp_prompt_resolved = await client.get_prompt(prompt_name)
+                    return
+                except KeyError:
+                    continue
+
     def _build_input(self, input_text: str) -> dict:
         messages: list[BaseMessage] = []
-        if self.system_prompt:
+        if self._mcp_prompt_resolved:
+            messages.append(SystemMessage(content=self._mcp_prompt_resolved, id="system"))
+        elif self.system_prompt:
             messages.append(SystemMessage(content=self.system_prompt, id="system"))
         messages.append(HumanMessage(content=input_text))
         return {"messages": messages}
@@ -279,6 +318,7 @@ class Agent:
         session_id: str | None = None,
     ) -> str:
         await self._aensure_graph()
+        await self._resolve_mcp_prompt()
         config = self._make_config(session_id)
         state = await self._graph.ainvoke(
             self._build_input(input_text), config=config
@@ -305,6 +345,7 @@ class Agent:
         session_id: str | None = None,
     ) -> AsyncIterator[dict]:
         await self._aensure_graph()
+        await self._resolve_mcp_prompt()
         config = self._make_config(session_id)
         async for event in self._graph.astream(
             self._build_input(input_text), config=config
