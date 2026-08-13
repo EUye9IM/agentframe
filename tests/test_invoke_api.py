@@ -21,41 +21,33 @@ class TestInvokeApi:
         req = agent.requests[0]
         assert isinstance(req.messages[0], HumanMessage)
 
-    def test_invoke_messages_uses_given_messages(self, make_agent):
-        from langchain_core.messages import HumanMessage
-
-        agent = make_agent([[content("hi"), done()]], system_prompt="sys")
-        agent.invoke_messages([HumanMessage(content="custom")])
-        req = agent.requests[0]
-        assert len(req.messages) == 1
-        assert req.messages[0].content == "custom"
-
-    def test_invoke_messages_exits_through_after_trace(self, make_agent):
-        agent = make_agent([[content("hi"), done()]])
-        result = agent.invoke_messages([HumanMessage(content="custom")])
-        assert result == "hi"
-        assert "after_trace" in agent.log
-        assert "before_trace" not in agent.log
-
-    def test_stream_bypasses_trace_hooks(self, make_agent):
-        agent = make_agent([[content("hi"), done()]])
-        list(agent.stream("go"))
-        assert "before_trace" not in agent.log
-        assert "after_trace" not in agent.log
-
-    def test_session_persistence_via_compile_kwargs_checkpointer(self, make_agent):
+    def test_history_via_checkpointer_and_thread_id(self, make_agent):
         agent = make_agent(
             [[content("first"), done()], [content("second"), done()]],
+            system_prompt="sys",
             compile_kwargs={"checkpointer": InMemorySaver()},
         )
         r1 = agent.invoke("q1", config={"configurable": {"thread_id": "s1"}})
         assert r1 == "first"
         r2 = agent.invoke("q2", config={"configurable": {"thread_id": "s1"}})
         assert r2 == "second"
-        # second request should include first turn's AIMessage history
+        # 历史 = checkpointer 恢复的 state；第二轮请求带上前轮 AIMessage
         req2 = agent.requests[1]
         assert any(isinstance(m, AIMessage) for m in req2.messages)
         assert any(m.content == "first" for m in req2.messages)
+        # system 消息按 id 去重，第二轮不重复
+        assert sum(isinstance(m, SystemMessage) for m in req2.messages) == 1
+
+    def test_history_is_per_thread(self, make_agent):
+        agent = make_agent(
+            [[content("first"), done()], [content("second"), done()]],
+            compile_kwargs={"checkpointer": InMemorySaver()},
+        )
+        agent.invoke("q1", config={"configurable": {"thread_id": "s1"}})
+        agent.invoke("q2", config={"configurable": {"thread_id": "s2"}})
+        # 不同 thread_id 互不可见，第二轮不带 s1 的历史
+        req2 = agent.requests[1]
+        assert not any(m.content == "first" for m in req2.messages)
 
 
 class TestGraphStructure:

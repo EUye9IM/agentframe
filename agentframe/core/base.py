@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import Any, Protocol, cast
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -22,10 +22,6 @@ class _AgentGraph(Protocol):
     def invoke(
         self, input: AgentState, config: RunnableConfig | None = None
     ) -> AgentState: ...
-
-    def stream(
-        self, input: AgentState, config: RunnableConfig | None = None
-    ) -> Iterator[dict[str, Any]]: ...
 
 
 def _copy_state(state: AgentState) -> AgentState:
@@ -226,34 +222,4 @@ class BaseAgent(Middleware):
         self._ensure_graph()
         assert self._graph is not None
         state = self._graph.invoke(self._build_input(input_text), config=config)
-        return self.after_trace(state, session_id)
-
-    def stream(
-        self,
-        input_text: str,
-        *,
-        session_id: str | None = None,
-        config: RunnableConfig | None = None,
-    ) -> Iterator[dict[str, Any]]:
-        """图级事件流（调试/逃生口用），逐节点产出原始 state dict。
-
-        与 `invoke` 不同：绕过 before_trace/after_trace，`session_id` 仅为
-        占位；主流的流式体验走 `on_llm_content` / `on_llm_reasoning` 事件钩子。
-        """
-        self._ensure_graph()
-        assert self._graph is not None
-        yield from self._graph.stream(self._build_input(input_text), config=config)
-
-    def invoke_messages(
-        self,
-        messages: list[BaseMessage],
-        *,
-        session_id: str | None = None,
-        config: RunnableConfig | None = None,
-    ) -> str:
-        """以显式消息列表执行（multiagent 用）。无文本输入，故不调 before_trace；
-        出口走 after_trace 统一收尾。"""
-        self._ensure_graph()
-        assert self._graph is not None
-        state = self._graph.invoke({"messages": messages}, config=config)
         return self.after_trace(state, session_id)

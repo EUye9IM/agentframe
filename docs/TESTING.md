@@ -106,11 +106,13 @@ class RecordingAgent(BaseAgent):
 
 ### T5 公共 API（tests/test_invoke_api.py）
 
+> `invoke` 是唯一公开入口（文本入、str 出）；历史场景 = checkpointer + `config` thread_id。
+
 | # | 场景 | 断言 |
 |---|------|------|
 | 19 | `invoke(input_text)` | 历史首条为 SystemMessage（有 system_prompt）/ HumanMessage |
-| 20 | `invoke_messages(messages)` | 直接用给定消息，不注入 system |
-| 21 | `compile_kwargs={"checkpointer": InMemorySaver()}` + 同 `config` thread_id 两次 invoke | 历史跨会话延续（原生持久化逃生口） |
+| 20 | 同 thread_id 两轮 invoke + checkpointer | 历史跨回合延续：第二轮请求带前轮 AIMessage；system 按 id 去重不重复 |
+| 21 | 不同 thread_id | 历史互不可见，隔离生效 |
 | 22 | 编译后图 | 节点含 LLM/TOOLS，entry 为 LLM |
 
 ### T6 LLMClient 解析（tests/test_llm_client.py）
@@ -142,8 +144,6 @@ class RecordingAgent(BaseAgent):
 | # | 场景 | 断言 |
 |---|------|------|
 | 34 | agent 层 usage/finish_reason 透传 | `after_llm` 收到的 `response.usage` / `response.finish_reason` 由流式 `done` 事件填充（A2 回归） |
-| 35 | `invoke_messages` 出口 | 走 `after_trace`：log 含 `after_trace`、不含 `before_trace`（C1 回归） |
-| 36 | `stream()` 绕过 trace | 不触发 `before_trace`/`after_trace`（C2 回归） |
 
 ## 3. 运行
 

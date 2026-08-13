@@ -18,11 +18,11 @@ class Middleware:
     """
 
     def before_trace(self, input_text: str, session: str | None) -> str:
-        """回合入口（仅 invoke 有文本输入，stream/invoke_messages 不触发）。"""
+        """回合入口（仅 invoke 触发），可改写输入。"""
         return input_text
 
     def after_trace(self, data: AgentState, session: str | None) -> str:
-        """回合出口（invoke / invoke_messages 收尾）。取最后一条 AI 消息；
+        """回合出口（invoke 收尾）。取最后一条 AI 消息；
         首轮失败时 history 里只有 HumanMessage，回显用户输入会误导调用方，
         故此时返回空串。"""
         for m in reversed(data["messages"]):

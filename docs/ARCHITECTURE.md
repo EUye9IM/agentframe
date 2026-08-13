@@ -162,8 +162,8 @@ class LLMClient:
 
 | 钩子 | 签名 | 类型 | 触发点 |
 |------|------|------|--------|
-| `before_trace` | `(input: str, session: str\|None) -> str` | 变换 | invoke() 入口（仅文本入口；stream/invoke_messages 不触发），可改写输入 |
-| `after_trace` | `(data: AgentState, session: str\|None) -> str` | 变换 | invoke()/invoke_messages() 出口，取最后一条 AI 消息（首轮失败时无 AI 消息则返回空串，不回显用户输入） |
+| `before_trace` | `(input: str, session: str\|None) -> str` | 变换 | invoke() 入口（唯一入口），可改写输入 |
+| `after_trace` | `(data: AgentState, session: str\|None) -> str` | 变换 | invoke() 出口，取最后一条 AI 消息（首轮失败时无 AI 消息则返回空串，不回显用户输入） |
 | `before_turn` | `(data: AgentState) -> AgentState` | 变换 | 每个回合（LLM 调用）开始 |
 | `after_turn` | `(data: AgentState) -> AgentState` | 变换 | TOOLS 结束 / 无工具时 LLM 结束 |
 | `before_llm` | `(request: LLMRequest) -> LLMRequest` | 变换 | LLM 调用前，可改请求体（messages/tools/temperature...） |
@@ -359,9 +359,7 @@ my = MyChat(llm_client=client, middlewares=[memory()])
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `invoke` | `(input_text, *, session_id=None, config=None) -> str` | 同步执行，包在 before_trace/after_trace 内；`config` 原样透传 `graph.invoke`（checkpointer/interrupt 逃生口） |
-| `stream` | `(input_text, *, session_id=None, config=None) -> Iterator[dict]` | 图级事件流（调试/逃生口），绕过 trace 钩子；流式体验走 `on_llm_content`/`on_llm_reasoning` 事件钩子 |
-| `invoke_messages` | `(messages, *, session_id=None, config=None) -> str` | 显式消息列表（multiagent 用），出口走 after_trace |
+| `invoke` | `(input_text, *, session_id=None, config=None) -> str` | **唯一公开入口**：文本入、str 出，包在 before_trace/after_trace 内；`config` 原样透传 `graph.invoke`（checkpointer 逃生口）；流式体验走 `on_llm_content`/`on_llm_reasoning` 事件钩子 |
 
 ## 9. 模块布局
 
@@ -388,7 +386,7 @@ agentframe/
     mcp_client.py        # 同步（线程桥为唯一路径）
   compression/
     summarizer.py        # 同步
-  multiagent/            # 同步编排（Member 基于 Agent + invoke_messages）
+  multiagent/            # 同步编排（Member 基于 Agent + invoke + checkpointer 线程）
   cli/                   # Agent 子类示例（含原渲染逻辑）
 examples/
   chatroom_315.py
@@ -406,7 +404,7 @@ pyproject.toml           # version 0.2.0，去 pytest-asyncio
 | 长期 memory | 中间件持外部 Store，`before_turn` 注入 / `after_turn` 写回 | ❌ 未实现 |
 | LangGraph 原生持久化 | 逃生口：`compile_kwargs={"checkpointer": ...}` + `invoke(..., config={"configurable": {"thread_id": ...}})` | ✅ |
 | model 切换 | 中间件换 `self.llm_client`（model 归端点） | ✅ |
-| 子 Agent / multiagent | 子 Agent 包成 FunctionTool；multiagent 用 `invoke_messages` | ✅ |
+| 子 Agent / multiagent | 子 Agent 包成 FunctionTool；multiagent 成员经 `invoke` + 独立 checkpointer 线程隔离历史 | ✅ |
 | 错误重试 | `handle_error` → `Command(goto)` + `retry_policy` | ✅ |
 | 流式 UI | `on_llm_content` / `on_content_end` 在 invoke 内同步触发 | ✅ |
 | 人工审批 | `before_tool_call` 阻塞式 y/n（纯同步） | ✅ |

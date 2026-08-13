@@ -112,7 +112,7 @@ Agent（公共类，可继承 + 可组合）
 
 - ✅ 核心：`BaseAgent` / 钩子协议 / `Phase` 枚举 / `AgentState`
 - ✅ LLM 层：`LLMClient`（裸 httpx）/ `LLMRequest` / `LLMResponse` / `LLMStreamEvent`
-- ✅ 测试：40 个用例（状态转换 / 钩子 / 错误处理 / LLMClient 解析）
+- ✅ 测试：38 个用例（状态转换 / 钩子 / 错误处理 / LLMClient 解析）
 - 🚧 实现中：middlewares（tools/mcp/compress/memory）、multiagent、CLI、examples
 
 ## License
