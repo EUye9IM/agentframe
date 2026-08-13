@@ -355,9 +355,9 @@ my = MyChat(llm_client=client, middlewares=[memory()])
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `invoke` | `(input_text, *, session_id=None) -> str` | 同步执行 |
-| `stream` | `(input_text, *, session_id=None) -> Iterator[dict]` | 图事件流，调用方可外部停止 |
-| `invoke_messages` | `(messages, *, session_id=None) -> str` | 显式消息列表（multiagent 用） |
+| `invoke` | `(input_text, *, session_id=None, config=None) -> str` | 同步执行；`config` 原样透传 `graph.invoke`（checkpointer/interrupt 逃生口） |
+| `stream` | `(input_text, *, session_id=None, config=None) -> Iterator[dict]` | 图事件流，调用方可外部停止 |
+| `invoke_messages` | `(messages, *, session_id=None, config=None) -> str` | 显式消息列表（multiagent 用） |
 
 ## 9. 模块布局
 
@@ -377,7 +377,7 @@ agentframe/
     tools.py             # ToolsMiddleware
     mcp.py               # MCPMiddleware
     compression.py       # CompressionMiddleware
-    memory.py            # MemoryMiddleware（checkpointer + session_id）
+    memory.py            # MemoryMiddleware（session_id → Store，未实现）
   tools/
     registry.py
     function_tool.py
@@ -398,8 +398,9 @@ pyproject.toml           # version 0.2.0，去 pytest-asyncio
 | tools | `ToolsMiddleware.before_llm` 注入 + `before_tool_call` 审批 + 分发 | ✅ |
 | mcp | `MCPMiddleware` 同上，分发走线程桥 | ✅ |
 | compress | `CompressionMiddleware.before_llm` 从 messages 估大小，超阈值摘要 | ✅ |
-| 会话 memory | `MemoryMiddleware`：session_id → thread_id 喂 checkpointer | ✅ |
-| 长期 memory | 中间件持外部 Store，`before_turn` 注入 / `after_turn` 写回 | ✅ |
+| 会话 memory | `MemoryMiddleware`：session_id → Store（before_turn 注入 / after_turn 写回） | ❌ 未实现 |
+| 长期 memory | 中间件持外部 Store，`before_turn` 注入 / `after_turn` 写回 | ❌ 未实现 |
+| LangGraph 原生持久化 | 逃生口：`compile_kwargs={"checkpointer": ...}` + `invoke(..., config={"configurable": {"thread_id": ...}})` | ✅ |
 | model 切换 | 中间件换 `self.llm_client`（model 归端点） | ✅ |
 | 子 Agent / multiagent | 子 Agent 包成 FunctionTool；multiagent 用 `invoke_messages` | ✅ |
 | 错误重试 | `handle_error` → `Command(goto)` + `retry_policy` | ✅ |
@@ -428,6 +429,6 @@ pyproject.toml           # version 0.2.0，去 pytest-asyncio
 ## 14. 后续扩展（不在首版）
 
 - 中间件自定义状态（`Phase` 扩展机制）——首版明确**不做**，`Phase` 封闭。
-- 中间件私有 channel（进 checkpointer）——保持 state 最瘦，不做。
+- 中间件私有 channel——保持 state 最瘦，不做。
 - 工具流式输出钩子 `on_tool_stream`。
 - 流式中断的 `StreamStop` 事件钩子（替代中间件覆写 `handle_error`）——当前由中间件覆写 `handle_error` 认领。

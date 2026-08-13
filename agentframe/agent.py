@@ -20,7 +20,7 @@ class Agent(BaseAgent):
         llm_client: LLMClientProtocol,
         system_prompt: str | None = None,
         middlewares: list[Any] | None = None,
-        checkpointer: Any | None = None,
+        compile_kwargs: dict[str, Any] | None = None,
     ) -> None:
         mws = list(middlewares or [])
         if mws:
@@ -32,5 +32,5 @@ class Agent(BaseAgent):
         super().__init__(
             llm_client=llm_client,
             system_prompt=system_prompt,
-            checkpointer=checkpointer,
+            compile_kwargs=compile_kwargs,
         )

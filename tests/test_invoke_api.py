@@ -30,14 +30,14 @@ class TestInvokeApi:
         assert len(req.messages) == 1
         assert req.messages[0].content == "custom"
 
-    def test_session_persistence_with_checkpointer(self, make_agent):
+    def test_session_persistence_via_compile_kwargs_checkpointer(self, make_agent):
         agent = make_agent(
             [[content("first"), done()], [content("second"), done()]],
-            checkpointer=InMemorySaver(),
+            compile_kwargs={"checkpointer": InMemorySaver()},
         )
-        r1 = agent.invoke("q1", session_id="s1")
+        r1 = agent.invoke("q1", config={"configurable": {"thread_id": "s1"}})
         assert r1 == "first"
-        r2 = agent.invoke("q2", session_id="s1")
+        r2 = agent.invoke("q2", config={"configurable": {"thread_id": "s1"}})
         assert r2 == "second"
         # second request should include first turn's AIMessage history
         req2 = agent.llm_client.requests[1]

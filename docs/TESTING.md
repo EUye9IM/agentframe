@@ -110,7 +110,7 @@ class RecordingAgent(BaseAgent):
 |---|------|------|
 | 19 | `invoke(input_text)` | 历史首条为 SystemMessage（有 system_prompt）/ HumanMessage |
 | 20 | `invoke_messages(messages)` | 直接用给定消息，不注入 system |
-| 21 | 注入 InMemorySaver + 同 session 两次 invoke | 历史跨会话延续 |
+| 21 | `compile_kwargs={"checkpointer": InMemorySaver()}` + 同 `config` thread_id 两次 invoke | 历史跨会话延续（原生持久化逃生口） |
 | 22 | 编译后图 | 节点含 LLM/TOOLS，entry 为 LLM |
 
 ## 3. 运行

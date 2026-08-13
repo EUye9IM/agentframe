@@ -34,10 +34,10 @@ class BaseAgent(Middleware):
         *,
         llm_client: LLMClientProtocol,
         system_prompt: str | None = None,
-        checkpointer: Any | None = None,
+        compile_kwargs: dict[str, Any] | None = None,
     ) -> None:
         self.system_prompt: str | None = system_prompt
-        self.checkpointer: Any | None = checkpointer
+        self.compile_kwargs: dict[str, Any] = compile_kwargs or {}
         self._llm_client: LLMClientProtocol = llm_client
         self._graph: Any = None
         self._tools: dict[str, Any] = {}
@@ -168,7 +168,7 @@ class BaseAgent(Middleware):
         )
         workflow.add_edge(Phase.TOOLS, Phase.LLM)
         workflow.set_entry_point(Phase.LLM)
-        self._graph = workflow.compile(checkpointer=self.checkpointer)
+        self._graph = workflow.compile(**self.compile_kwargs)
 
     def _ensure_graph(self) -> None:
         if self._graph is None:
@@ -185,26 +185,35 @@ class BaseAgent(Middleware):
         messages.append(HumanMessage(content=input_text))
         return {"messages": messages}
 
-    def invoke(self, input_text: str, *, session_id: str | None = None) -> str:
+    def invoke(
+        self,
+        input_text: str,
+        *,
+        session_id: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> str:
         input_text = self.before_trace(input_text, session_id)
         self._ensure_graph()
-        config = self._make_config(session_id)
         state = self._graph.invoke(self._build_input(input_text), config=config)
         return self.after_trace(state, session_id)
 
-    def stream(self, input_text: str, *, session_id: str | None = None) -> Iterator[dict[str, Any]]:
+    def stream(
+        self,
+        input_text: str,
+        *,
+        session_id: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> Iterator[dict[str, Any]]:
         self._ensure_graph()
-        config = self._make_config(session_id)
         yield from self._graph.stream(self._build_input(input_text), config=config)
 
-    def invoke_messages(self, messages: list[BaseMessage], *, session_id: str | None = None) -> str:
+    def invoke_messages(
+        self,
+        messages: list[BaseMessage],
+        *,
+        session_id: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> str:
         self._ensure_graph()
-        config = self._make_config(session_id)
         state = self._graph.invoke({"messages": messages}, config=config)
         return state["messages"][-1].content
-
-    @staticmethod
-    def _make_config(session_id: str | None) -> dict[str, Any] | None:
-        if session_id is None:
-            return None
-        return {"configurable": {"thread_id": session_id}}
