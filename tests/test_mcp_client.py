@@ -313,3 +313,102 @@ class TestMCPClientTools:
         client = MCPClient({"transport": "stdio", "command": "dummy"})
         client._tools = {}
         assert client.get_openai_tools() == []
+
+
+class TestMCPClientSync:
+    """Sync bridge: background thread + persistent event loop."""
+
+    def test_connect_sync_uses_background_loop(self):
+        with (
+            patch("mcp.client.stdio.stdio_client") as mock_stdio,
+            patch("mcp.ClientSession") as mock_session_cls,
+        ):
+            mock_read, mock_write = MagicMock(), MagicMock()
+            mock_stdio.return_value.__aenter__ = AsyncMock(return_value=(mock_read, mock_write))
+
+            mock_session = AsyncMock()
+            mock_session.initialize = AsyncMock()
+            tools_result = MagicMock()
+            tool = MagicMock()
+            tool.name = "sync_tool"
+            tool.description = ""
+            tool.inputSchema = {"type": "object"}
+            tools_result.tools = [tool]
+            mock_session.list_tools = AsyncMock(return_value=tools_result)
+            prompts_result = MagicMock()
+            prompts_result.prompts = []
+            mock_session.list_prompts = AsyncMock(return_value=prompts_result)
+            mock_session_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+
+            client = MCPClient({"transport": "stdio", "command": "dummy"})
+            try:
+                client.connect_sync()
+                assert "sync_tool" in client._tools
+                assert client._loop is not None
+            finally:
+                client.close_sync()
+
+    def test_call_tool_sync_returns_result(self):
+        with (
+            patch("mcp.client.stdio.stdio_client") as mock_stdio,
+            patch("mcp.ClientSession") as mock_session_cls,
+        ):
+            mock_read, mock_write = MagicMock(), MagicMock()
+            mock_stdio.return_value.__aenter__ = AsyncMock(return_value=(mock_read, mock_write))
+
+            mock_session = AsyncMock()
+            mock_session.initialize = AsyncMock()
+            tools_result = MagicMock()
+            tool = MagicMock()
+            tool.name = "sync_tool"
+            tool.description = ""
+            tool.inputSchema = {"type": "object"}
+            tools_result.tools = [tool]
+            mock_session.list_tools = AsyncMock(return_value=tools_result)
+            prompts_result = MagicMock()
+            prompts_result.prompts = []
+            mock_session.list_prompts = AsyncMock(return_value=prompts_result)
+            call_result = MagicMock()
+            item = MagicMock()
+            item.text = "sync done"
+            call_result.content = [item]
+            mock_session.call_tool = AsyncMock(return_value=call_result)
+            mock_session_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+
+            client = MCPClient({"transport": "stdio", "command": "dummy"})
+            try:
+                client.connect_sync()
+                result = client.call_tool_sync("sync_tool", {"x": 1})
+                assert result == "sync done"
+            finally:
+                client.close_sync()
+
+    def test_call_tool_sync_unknown_returns_error(self):
+        client = MCPClient({"transport": "stdio", "command": "dummy"})
+        client._tools = {}
+        result = client.call_tool_sync("nonexistent", {})
+        assert "Error" in result
+
+    def test_connect_sync_unknown_transport_raises(self):
+        client = MCPClient({"transport": "unknown"})
+        with pytest.raises(ValueError, match="Unsupported MCP transport"):
+            client.connect_sync()
+
+    def test_get_prompt_sync_returns_text(self):
+        client = MCPClient({"transport": "stdio", "command": "dummy"})
+        prompt = MCPPrompt(
+            name="greeting",
+            description="",
+            arguments=[],
+            session=MagicMock(),
+        )
+        client._prompts = {"greeting": prompt}
+        prompt.render = AsyncMock(return_value="Hello!")
+        result = client.get_prompt_sync("greeting")
+        assert result == "Hello!"
+
+    def test_get_prompt_sync_unknown_name_raises(self):
+        client = MCPClient({"transport": "stdio", "command": "dummy"})
+        client._prompts = {}
+        with pytest.raises(KeyError, match="not found"):
+            client.get_prompt_sync("nonexistent")

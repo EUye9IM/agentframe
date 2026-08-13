@@ -109,8 +109,12 @@ class Agent:
         if self.compressor and total_tokens > self.compressor.threshold:
             messages = self.compressor.compress(messages)
             total_tokens = 0
-        tools = self.tool_registry.get_openai_tools() or None
-        return messages, total_tokens, tools
+        tools: list[dict] = self.tool_registry.get_openai_tools() or []
+        if self.mcp_configs or self._mcp_clients:
+            self._ensure_mcp_connected_sync()
+            for client in self._mcp_clients:
+                tools.extend(client.get_openai_tools())
+        return messages, total_tokens, tools or None
 
     def _process_tool_calls(
         self, messages: list, last_message: AIMessage
@@ -147,8 +151,10 @@ class Agent:
             tool = self.tool_registry.tools.get(tc["name"])
             if isinstance(tool, FunctionTool):
                 result = tool.call(**tc["args"])
+            elif self._mcp_clients:
+                result = self._call_mcp_tool_sync(tc["name"], tc["args"])
             else:
-                result = f"Error: tool '{tc['name']}' requires async (use ainvoke/astream)"
+                result = f"Error: tool '{tc['name']}' not found"
             self.on_tool_result(tc["name"], str(result))
             messages.append(
                 ToolMessage(content=str(result), tool_call_id=tc["id"])
@@ -233,6 +239,17 @@ class Agent:
             await client.connect()
             self._mcp_clients.append(client)
 
+    def _ensure_mcp_connected_sync(self) -> None:
+        if self._mcp_clients is not None:
+            return
+        from ..tools.mcp_client import MCPClient
+
+        self._mcp_clients = []
+        for config in self.mcp_configs:
+            client = MCPClient(config)
+            client.connect_sync()
+            self._mcp_clients.append(client)
+
     async def _call_mcp_tool(self, name: str, args: dict) -> str:
         await self._ensure_mcp_connected()
         assert self._mcp_clients is not None
@@ -246,10 +263,29 @@ class Agent:
             return f"Error: MCP tool '{name}' failed: {last_error}"
         return f"Error: MCP tool '{name}' not found"
 
+    def _call_mcp_tool_sync(self, name: str, args: dict) -> str:
+        self._ensure_mcp_connected_sync()
+        assert self._mcp_clients is not None
+        last_error: Exception | None = None
+        for client in self._mcp_clients:
+            try:
+                return client.call_tool_sync(name, args)
+            except Exception as e:
+                last_error = e
+        if last_error:
+            return f"Error: MCP tool '{name}' failed: {last_error}"
+        return f"Error: MCP tool '{name}' not found"
+
     async def aclose_mcp(self) -> None:
         if self._mcp_clients is not None:
             for client in self._mcp_clients:
                 await client.close()
+            self._mcp_clients = None
+
+    def close_mcp_sync(self) -> None:
+        if self._mcp_clients is not None:
+            for client in self._mcp_clients:
+                client.close_sync()
             self._mcp_clients = None
 
     async def _ashould_continue(self, state: AgentState) -> str:
@@ -351,6 +387,35 @@ class Agent:
             self._build_input(input_text), config=config
         ):
             yield event
+
+    def invoke_messages(
+        self,
+        messages: list[BaseMessage],
+        *,
+        session_id: str | None = None,
+    ) -> str:
+        """Run the agent starting from an explicit message list (bypasses _build_input).
+
+        The caller fully controls the message structure (e.g. persona as a
+        SystemMessage, existing conversation history, tool results).
+        """
+        self._ensure_graph()
+        config = self._make_config(session_id)
+        state = self._graph.invoke({"messages": messages}, config=config)
+        return state["messages"][-1].content
+
+    async def ainvoke_messages(
+        self,
+        messages: list[BaseMessage],
+        *,
+        session_id: str | None = None,
+    ) -> str:
+        """Async version of `invoke_messages`."""
+        await self._aensure_graph()
+        await self._resolve_mcp_prompt()
+        config = self._make_config(session_id)
+        state = await self._graph.ainvoke({"messages": messages}, config=config)
+        return state["messages"][-1].content
 
     # ------------------------------------------------------------------
     # Helpers

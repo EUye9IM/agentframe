@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -70,6 +72,52 @@ class MCPClient:
         self._tools: dict[str, MCPTool] = {}
         self._read: Any = None
         self._write: Any = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: threading.Thread | None = None
+
+    # ------------------------------------------------------------------
+    # Sync bridge: run the async MCP SDK on a persistent background loop
+    # ------------------------------------------------------------------
+
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        if self._loop is None or self._loop.is_closed():
+            self._loop = asyncio.new_event_loop()
+            self._loop_thread = threading.Thread(
+                target=self._loop.run_forever,
+                name=f"mcp-{self.config.get('command', self.config.get('url', 'client'))}",
+                daemon=True,
+            )
+            self._loop_thread.start()
+        return self._loop
+
+    def _run_sync(self, coro: Any) -> Any:
+        loop = self._ensure_loop()
+        return asyncio.run_coroutine_threadsafe(coro, loop).result()
+
+    def connect_sync(self) -> None:
+        self._run_sync(self.connect())
+
+    def call_tool_sync(self, name: str, arguments: dict[str, Any]) -> str:
+        if name not in self._tools:
+            return f"Error: MCP tool '{name}' not found"
+        return self._run_sync(self._tools[name].call(arguments))
+
+    def get_prompt_sync(self, name: str, args: dict[str, Any] | None = None) -> str:
+        if name not in self.prompts:
+            raise KeyError(f"MCP prompt '{name}' not found")
+        return self._run_sync(self.prompts[name].render(args))
+
+    def close_sync(self) -> None:
+        if self._loop is None or self._loop.is_closed():
+            return
+        try:
+            self._run_sync(self.close())
+        finally:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            if self._loop_thread:
+                self._loop_thread.join(timeout=5)
+            self._loop = None
+            self._loop_thread = None
 
     async def connect(self) -> None:
         transport = self.config.get("transport", "stdio")
