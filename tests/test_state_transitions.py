@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import ToolMessage
 
 from .conftest import content, done
 
@@ -57,7 +57,7 @@ class TestStateTransitions:
         assert agent.log.count("before_tool_call") == 1
         assert agent.log.count("after_tool_result:echo_hi") == 1
         assert "before_tool_call" in agent.log
-        second_request = agent.llm_client.requests[1]
+        second_request = agent.requests[1]
         assert any(isinstance(m, ToolMessage) for m in second_request.messages)
 
     def test_multiple_tool_rounds(self, make_agent):

@@ -23,3 +23,16 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["agentframe*"]
+
+[tool.basedpyright]
+# LLM/JSON 载荷与 LangGraph 边界天然用 Any；钩子基类参数是协议契约；builder 模式返回值有意忽略。
+reportExplicitAny = "none"
+reportUnusedParameter = "none"
+reportMissingTypeStubs = "none"
+reportUnusedCallResult = "none"
+
+# tests/ 故意保持松类型（本地中间件违反 dataclass 类型等），unknown 类规则按路径校准
+executionEnvironments = [
+  { root = "tests", extraPaths = ["."], reportMissingParameterType = "none", reportUnknownParameterType = "none", reportUnknownVariableType = "none", reportUnknownMemberType = "none", reportUnknownArgumentType = "none" },
+  { root = "." },
+]

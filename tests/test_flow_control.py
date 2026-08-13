@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from langchain_core.messages import AIMessage
-
 from agentframe import Phase
 
 from .conftest import content, done

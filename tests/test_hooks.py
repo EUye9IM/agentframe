@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import override
+
 from langchain_core.messages import AIMessage
 
 from agentframe import Agent
@@ -30,6 +32,7 @@ class TestHookChain:
 
         def make_switcher(other_client):
             class Switcher(Middleware):
+                @override
                 def before_llm(self, request):
                     request = super().before_llm(request)
                     setattr(self, "llm_client", other_client)
@@ -95,6 +98,7 @@ class TestDynamicInheritance:
 
         def make_middleware(tag: str):
             class M(Middleware):
+                @override
                 def before_llm(self, request):
                     request = super().before_llm(request)
                     order.append(tag)
@@ -113,6 +117,7 @@ class TestDynamicInheritance:
 
         def tools(fn):
             class ToolsMiddleware(Middleware):
+                @override
                 def before_llm(self, request):
                     request = super().before_llm(request)
                     request.tools = (request.tools or []) + [fn]

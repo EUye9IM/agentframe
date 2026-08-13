@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from langgraph.errors import NodeError
-
 from agentframe import Phase, StreamStop
-from agentframe.core.base import BaseAgent
 
 from .conftest import content, done
 
@@ -67,7 +64,7 @@ class TestErrors:
         result = agent.invoke("go")
         assert handled["n"] == 1
         assert result == "partial-halt"
-        assert len(agent.llm_client.requests) == 1
+        assert len(agent.requests) == 1
 
     def test_streamstop_no_override_defaults_end(self, make_agent):
         def on_content(text):

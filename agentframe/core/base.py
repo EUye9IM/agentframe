@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import Any, cast
+from collections.abc import Callable, Iterator
+from typing import Any, Protocol, cast
 
-from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.errors import NodeError
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command
@@ -12,6 +13,23 @@ from .hooks import Middleware
 from .phases import Phase
 from .state import AgentState
 from ..llm.types import LLMClientProtocol, LLMRequest, LLMResponse
+
+
+class _AgentGraph(Protocol):
+    """Minimal compiled-graph surface used by the engine (LangGraph's own
+    signatures are heavily overloaded/loosely typed)."""
+
+    def invoke(
+        self, input: AgentState, config: RunnableConfig | None = None
+    ) -> AgentState: ...
+
+    def stream(
+        self, input: AgentState, config: RunnableConfig | None = None
+    ) -> Iterator[dict[str, Any]]: ...
+
+
+def _copy_state(state: AgentState) -> AgentState:
+    return cast(AgentState, cast(object, dict(state)))
 
 
 class StreamStop(Exception):
@@ -39,8 +57,8 @@ class BaseAgent(Middleware):
         self.system_prompt: str | None = system_prompt
         self.compile_kwargs: dict[str, Any] = compile_kwargs or {}
         self._llm_client: LLMClientProtocol = llm_client
-        self._graph: Any = None
-        self._tools: dict[str, Any] = {}
+        self._graph: _AgentGraph | None = None
+        self._tools: dict[str, Callable[..., Any]] = {}
         self._last_tool_call_id: str = ""
 
     # ------------------------------------------------------------------
@@ -64,8 +82,7 @@ class BaseAgent(Middleware):
     # ------------------------------------------------------------------
 
     def _act_llm(self, state: AgentState) -> dict[str, Any]:
-        data = dict(state)
-        data = self.before_turn(data)
+        data = self.before_turn(_copy_state(state))
         request = self.before_llm(self._build_request(data))
         full = ""
         reasoning = ""
@@ -94,19 +111,19 @@ class BaseAgent(Middleware):
         )
         messages = self.after_llm(response)
         if not tool_calls:
-            self.after_turn(dict(state))
+            self.after_turn(_copy_state(state))
         self._notify_state_changed(messages)
         return {"messages": messages}
 
     @staticmethod
     def _to_langchain_tool_calls(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        out = []
+        out: list[dict[str, Any]] = []
         for tc in tool_calls:
             out.append(
                 {
-                    "name": tc.get("name", ""),
-                    "args": tc.get("arguments", {}),
-                    "id": tc.get("id", ""),
+                    "name": cast(str, tc.get("name", "")),
+                    "args": cast(dict[str, Any], tc.get("arguments", {})),
+                    "id": cast(str, tc.get("id", "")),
                     "type": "tool_call",
                 }
             )
@@ -124,7 +141,7 @@ class BaseAgent(Middleware):
             result_str = str(self._dispatch_tool(tc["name"], tc["args"]))
             out.extend(self.after_tool_result(tc["name"], result_str))
         self._last_tool_call_id = ""
-        self.after_turn(dict(state))
+        self.after_turn(_copy_state(state))
         self._notify_state_changed(out)
         return {"messages": out}
 
@@ -132,9 +149,9 @@ class BaseAgent(Middleware):
         tool = self._tools.get(name)
         if tool is None:
             return f"Error: tool '{name}' not found"
-        return str(tool(**arguments))
+        return str(cast(object, tool(**arguments)))
 
-    def register_tool(self, fn: Any, *, name: str | None = None) -> None:
+    def register_tool(self, fn: Callable[..., Any], *, name: str | None = None) -> None:
         self._tools[name or fn.__name__] = fn
 
     def _notify_state_changed(self, messages: list[BaseMessage]) -> None:
@@ -158,9 +175,9 @@ class BaseAgent(Middleware):
     def _build_graph(self) -> None:
         workflow = StateGraph(AgentState)
         # langgraph 通过依赖注入传入 (state, error)，但其 StateNode 类型存根只声明单参数
-        error_handler = cast(Any, self._default_error_handler)
-        workflow.add_node(Phase.LLM, self._act_llm, error_handler=error_handler)
-        workflow.add_node(Phase.TOOLS, self._act_tools, error_handler=error_handler)
+        error_handler = cast(Runnable[Any, Any], self._default_error_handler)
+        workflow.add_node(Phase.LLM, self._act_llm, error_handler=error_handler)  # pyright: ignore[reportUnknownMemberType]
+        workflow.add_node(Phase.TOOLS, self._act_tools, error_handler=error_handler)  # pyright: ignore[reportUnknownMemberType]
         workflow.add_conditional_edges(
             Phase.LLM,
             self._route_after_llm,
@@ -168,7 +185,9 @@ class BaseAgent(Middleware):
         )
         workflow.add_edge(Phase.TOOLS, Phase.LLM)
         workflow.set_entry_point(Phase.LLM)
-        self._graph = workflow.compile(**self.compile_kwargs)
+        # compile_kwargs 是透传逃生口，参数不可静态定型
+        graph = workflow.compile(**self.compile_kwargs)  # pyright: ignore[reportAny, reportUnknownMemberType]
+        self._graph = cast(_AgentGraph, cast(object, graph))
 
     def _ensure_graph(self) -> None:
         if self._graph is None:
@@ -178,7 +197,7 @@ class BaseAgent(Middleware):
     # Public API
     # ------------------------------------------------------------------
 
-    def _build_input(self, input_text: str) -> dict[str, Any]:
+    def _build_input(self, input_text: str) -> AgentState:
         messages: list[BaseMessage] = []
         if self.system_prompt:
             messages.append(SystemMessage(content=self.system_prompt, id="system"))
@@ -190,10 +209,11 @@ class BaseAgent(Middleware):
         input_text: str,
         *,
         session_id: str | None = None,
-        config: dict[str, Any] | None = None,
+        config: RunnableConfig | None = None,
     ) -> str:
         input_text = self.before_trace(input_text, session_id)
         self._ensure_graph()
+        assert self._graph is not None
         state = self._graph.invoke(self._build_input(input_text), config=config)
         return self.after_trace(state, session_id)
 
@@ -202,9 +222,10 @@ class BaseAgent(Middleware):
         input_text: str,
         *,
         session_id: str | None = None,
-        config: dict[str, Any] | None = None,
+        config: RunnableConfig | None = None,
     ) -> Iterator[dict[str, Any]]:
         self._ensure_graph()
+        assert self._graph is not None
         yield from self._graph.stream(self._build_input(input_text), config=config)
 
     def invoke_messages(
@@ -212,8 +233,9 @@ class BaseAgent(Middleware):
         messages: list[BaseMessage],
         *,
         session_id: str | None = None,
-        config: dict[str, Any] | None = None,
+        config: RunnableConfig | None = None,
     ) -> str:
         self._ensure_graph()
+        assert self._graph is not None
         state = self._graph.invoke({"messages": messages}, config=config)
-        return state["messages"][-1].content
+        return str(state["messages"][-1].content)

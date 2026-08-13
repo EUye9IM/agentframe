@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import Any
+from collections.abc import Callable, Iterator
+from typing import Any, cast, override
 
 import pytest
+from langchain_core.messages import BaseMessage, ToolCall
+from langgraph.errors import NodeError
+from langgraph.types import Command
 
 from agentframe import BaseAgent
-from agentframe.llm.types import LLMRequest, LLMStreamEvent, Usage
+from agentframe.core.phases import Phase
+from agentframe.core.state import AgentState
+from agentframe.llm.types import LLMRequest, LLMResponse, LLMStreamEvent, Usage
 
 
 def content(text: str) -> LLMStreamEvent:
@@ -30,11 +35,11 @@ class ScriptedLLMClient:
         raise_at: int | None = None,
         exc: BaseException | None = None,
     ) -> None:
-        self.model = model
-        self.scripts = list(scripts)
+        self.model: str = model
+        self.scripts: list[list[LLMStreamEvent]] = list(scripts)
         self.requests: list[LLMRequest] = []
-        self.raise_at = raise_at
-        self.exc = exc
+        self.raise_at: int | None = raise_at
+        self.exc: BaseException | None = exc
 
     def stream(self, request: LLMRequest) -> Iterator[LLMStreamEvent]:
         self.requests.append(request)
@@ -44,99 +49,127 @@ class ScriptedLLMClient:
         for event in self.scripts.pop(0):
             yield event
 
-    def invoke(self, request: LLMRequest) -> Any:
-        raise NotImplementedError
-
 
 class RecordingAgent(BaseAgent):
     def __init__(
         self,
         *,
-        scripts,
-        hooks=None,
-        model="test-model",
+        scripts: list[list[LLMStreamEvent]],
+        hooks: dict[str, Callable[..., Any]] | None = None,
+        model: str = "test-model",
         raise_at: int | None = None,
         exc: BaseException | None = None,
-        **kw,
+        system_prompt: str | None = None,
+        compile_kwargs: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(
-            llm_client=ScriptedLLMClient(
-                scripts, model=model, raise_at=raise_at, exc=exc
-            ),
-            **kw,
+            llm_client=ScriptedLLMClient(scripts, model=model, raise_at=raise_at, exc=exc),
+            system_prompt=system_prompt,
+            compile_kwargs=compile_kwargs,
         )
         self.log: list[str] = []
         if hooks:
             for name, fn in hooks.items():
                 setattr(self, name, fn)
 
-    def before_trace(self, input_text, session):
+    @property
+    def requests(self) -> list[LLMRequest]:
+        return cast(ScriptedLLMClient, self._llm_client).requests
+
+    @override
+    def before_trace(self, input_text: str, session: str | None) -> str:
         self.log.append("before_trace")
         return super().before_trace(input_text, session)
 
-    def after_trace(self, data, session):
+    @override
+    def after_trace(self, data: AgentState, session: str | None) -> str:
         self.log.append("after_trace")
         return super().after_trace(data, session)
 
-    def before_turn(self, data):
+    @override
+    def before_turn(self, data: AgentState) -> AgentState:
         self.log.append("before_turn")
         return super().before_turn(data)
 
-    def after_turn(self, data):
+    @override
+    def after_turn(self, data: AgentState) -> AgentState:
         self.log.append("after_turn")
         return super().after_turn(data)
 
-    def before_llm(self, request):
+    @override
+    def before_llm(self, request: LLMRequest) -> LLMRequest:
         self.log.append("before_llm")
         return super().before_llm(request)
 
-    def on_llm_reasoning(self, text):
+    @override
+    def on_llm_reasoning(self, text: str) -> None:
         self.log.append("on_llm_reasoning")
         super().on_llm_reasoning(text)
 
-    def on_reasoning_end(self, reasoning):
+    @override
+    def on_reasoning_end(self, reasoning: str) -> None:
         self.log.append("on_reasoning_end")
         super().on_reasoning_end(reasoning)
 
-    def on_llm_content(self, text):
+    @override
+    def on_llm_content(self, text: str) -> None:
         self.log.append("on_llm_content")
         super().on_llm_content(text)
 
-    def on_content_end(self, content):
+    @override
+    def on_content_end(self, content: str) -> None:
         self.log.append("on_content_end")
         super().on_content_end(content)
 
-    def after_llm(self, response):
+    @override
+    def after_llm(self, response: LLMResponse) -> list[BaseMessage]:
         self.log.append("after_llm")
         return super().after_llm(response)
 
-    def before_tool_call(self, tool_calls):
+    @override
+    def before_tool_call(self, tool_calls: list[ToolCall]) -> list[ToolCall]:
         self.log.append("before_tool_call")
         return super().before_tool_call(tool_calls)
 
-    def after_tool_result(self, name, result):
+    @override
+    def after_tool_result(self, name: str, result: str) -> list[BaseMessage]:
         self.log.append(f"after_tool_result:{name}")
         return super().after_tool_result(name, result)
 
-    def handle_next(self, from_node, default):
+    @override
+    def handle_next(self, from_node: Phase, default: Phase) -> Phase:
         self.log.append("handle_next")
         return super().handle_next(from_node, default)
 
-    def handle_error(self, error, node):
+    @override
+    def handle_error(self, error: NodeError, node: str) -> Command[Phase]:
         self.log.append("handle_error")
         return super().handle_error(error, node)
 
-    def on_state_changed(self, messages):
+    @override
+    def on_state_changed(self, messages: list[BaseMessage]) -> None:
         self.log.append("on_state_changed")
         super().on_state_changed(messages)
 
 
 @pytest.fixture
-def make_agent():
-    def _make(scripts, *, hooks=None, raise_at=None, exc=None, **kw) -> RecordingAgent:
-        agent = RecordingAgent(
-            scripts=scripts, hooks=hooks, raise_at=raise_at, exc=exc, **kw
+def make_agent() -> Callable[..., RecordingAgent]:
+    def _make(
+        scripts: list[list[LLMStreamEvent]],
+        *,
+        hooks: dict[str, Callable[..., Any]] | None = None,
+        raise_at: int | None = None,
+        exc: BaseException | None = None,
+        system_prompt: str | None = None,
+        compile_kwargs: dict[str, Any] | None = None,
+    ) -> RecordingAgent:
+        return RecordingAgent(
+            scripts=scripts,
+            hooks=hooks,
+            raise_at=raise_at,
+            exc=exc,
+            system_prompt=system_prompt,
+            compile_kwargs=compile_kwargs,
         )
-        return agent
 
     return _make

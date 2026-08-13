@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
-
 from langchain_core.messages import BaseMessage, ToolCall, ToolMessage
 from langgraph.types import Command
 from langgraph.errors import NodeError
 
 from .phases import Phase
+from .state import AgentState
 from ..llm.types import LLMRequest, LLMResponse
 
 
@@ -21,13 +20,13 @@ class Middleware:
     def before_trace(self, input_text: str, session: str | None) -> str:
         return input_text
 
-    def after_trace(self, data: Any, session: str | None) -> str:
-        return data["messages"][-1].content
+    def after_trace(self, data: AgentState, session: str | None) -> str:
+        return str(data["messages"][-1].content)
 
-    def before_turn(self, data: Any) -> Any:
+    def before_turn(self, data: AgentState) -> AgentState:
         return data
 
-    def after_turn(self, data: Any) -> Any:
+    def after_turn(self, data: AgentState) -> AgentState:
         return data
 
     def before_llm(self, request: LLMRequest) -> LLMRequest:

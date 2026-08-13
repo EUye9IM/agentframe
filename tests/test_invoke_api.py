@@ -10,7 +10,7 @@ class TestInvokeApi:
     def test_invoke_builds_system_and_human(self, make_agent):
         agent = make_agent([[content("hi"), done()]], system_prompt="sys")
         agent.invoke("hello")
-        req = agent.llm_client.requests[0]
+        req = agent.requests[0]
         assert isinstance(req.messages[0], SystemMessage)
         assert req.messages[0].content == "sys"
         assert isinstance(req.messages[1], HumanMessage)
@@ -18,7 +18,7 @@ class TestInvokeApi:
     def test_invoke_no_system_prompt(self, make_agent):
         agent = make_agent([[content("hi"), done()]])
         agent.invoke("hello")
-        req = agent.llm_client.requests[0]
+        req = agent.requests[0]
         assert isinstance(req.messages[0], HumanMessage)
 
     def test_invoke_messages_uses_given_messages(self, make_agent):
@@ -26,7 +26,7 @@ class TestInvokeApi:
 
         agent = make_agent([[content("hi"), done()]], system_prompt="sys")
         agent.invoke_messages([HumanMessage(content="custom")])
-        req = agent.llm_client.requests[0]
+        req = agent.requests[0]
         assert len(req.messages) == 1
         assert req.messages[0].content == "custom"
 
@@ -40,7 +40,7 @@ class TestInvokeApi:
         r2 = agent.invoke("q2", config={"configurable": {"thread_id": "s1"}})
         assert r2 == "second"
         # second request should include first turn's AIMessage history
-        req2 = agent.llm_client.requests[1]
+        req2 = agent.requests[1]
         assert any(isinstance(m, AIMessage) for m in req2.messages)
         assert any(m.content == "first" for m in req2.messages)
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from langchain_core.messages import AIMessage
@@ -28,8 +28,8 @@ def _build_payload(request: LLMRequest, *, stream: bool) -> dict[str, Any]:
     return payload
 
 
-def _finish_tool_calls(acc: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
-    result = []
+def _finish_tool_calls(acc: dict[int, dict[str, str]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
     for idx in sorted(acc):
         tc = acc[idx]
         result.append(
@@ -42,56 +42,58 @@ def _finish_tool_calls(acc: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
-def _parse_chunk(data: dict[str, Any], tool_call_acc: dict[int, dict[str, Any]]) -> list[LLMStreamEvent]:
+def _parse_chunk(data: dict[str, Any], tool_call_acc: dict[int, dict[str, str]]) -> list[LLMStreamEvent]:
     events: list[LLMStreamEvent] = []
-    choices = data.get("choices") or []
+    choices = cast(list[dict[str, Any]], data.get("choices") or [])
     if not choices:
         return events
-    delta = choices[0].get("delta") or {}
+    delta = cast(dict[str, Any], choices[0].get("delta") or {})
     if delta.get("reasoning_content"):
-        events.append(LLMStreamEvent(type="reasoning", content=delta["reasoning_content"]))
+        events.append(LLMStreamEvent(type="reasoning", content=cast(str, delta["reasoning_content"])))
     if delta.get("content"):
-        events.append(LLMStreamEvent(type="content", content=delta["content"]))
+        events.append(LLMStreamEvent(type="content", content=cast(str, delta["content"])))
     if delta.get("tool_calls"):
-        for tc_delta in delta["tool_calls"]:
-            idx = tc_delta.get("index", 0)
-            acc = tool_call_acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+        for tc_delta in cast(list[dict[str, Any]], delta["tool_calls"]):
+            acc = tool_call_acc.setdefault(
+                cast(int, tc_delta.get("index", 0)), {"id": "", "name": "", "arguments": ""}
+            )
             if tc_delta.get("id"):
-                acc["id"] = tc_delta["id"]
-            fn = tc_delta.get("function") or {}
+                acc["id"] = cast(str, tc_delta["id"])
+            fn = cast(dict[str, Any], tc_delta.get("function") or {})
             if fn.get("name"):
-                acc["name"] = fn["name"]
+                acc["name"] = cast(str, fn["name"])
             if fn.get("arguments"):
-                acc["arguments"] += fn["arguments"]
+                acc["arguments"] += cast(str, fn["arguments"])
     return events
 
 
 def _parse_completion_response(data: dict[str, Any]) -> LLMResponse:
-    choice = (data.get("choices") or [{}])[0]
-    msg = choice.get("message") or {}
-    tool_calls = []
-    for tc in msg.get("tool_calls") or []:
+    choice = cast(dict[str, Any], (data.get("choices") or [{}])[0])
+    msg = cast(dict[str, Any], choice.get("message") or {})
+    tool_calls: list[dict[str, Any]] = []
+    for tc in cast(list[dict[str, Any]], msg.get("tool_calls") or []):
+        fn = cast(dict[str, Any], tc["function"])
         tool_calls.append(
             {
                 "id": tc.get("id", ""),
-                "name": tc["function"]["name"],
-                "arguments": json.loads(tc["function"].get("arguments") or "{}"),
+                "name": fn["name"],
+                "arguments": json.loads(cast(str, fn.get("arguments") or "{}")),
             }
         )
-    ai = AIMessage(content=msg.get("content") or "", tool_calls=tool_calls or [])
-    usage_raw = data.get("usage") or {}
-    usage = None
+    ai = AIMessage(content=cast(str, msg.get("content") or ""), tool_calls=tool_calls or [])
+    usage_raw = cast(dict[str, Any], data.get("usage") or {})
+    usage: Usage | None = None
     if usage_raw:
         usage = Usage(
-            prompt_tokens=usage_raw.get("prompt_tokens", 0),
-            completion_tokens=usage_raw.get("completion_tokens", 0),
-            total_tokens=usage_raw.get("total_tokens", 0),
+            prompt_tokens=cast(int, usage_raw.get("prompt_tokens", 0)),
+            completion_tokens=cast(int, usage_raw.get("completion_tokens", 0)),
+            total_tokens=cast(int, usage_raw.get("total_tokens", 0)),
         )
     return LLMResponse(
         message=ai,
         usage=usage,
-        finish_reason=choice.get("finish_reason"),
-        model=data.get("model"),
+        finish_reason=cast(str | None, choice.get("finish_reason")),
+        model=cast(str | None, data.get("model")),
         raw=data,
     )
 
@@ -104,14 +106,14 @@ class LLMClient:
         model: str,
         api_key: str | None = None,
         timeout: float = 120.0,
-        **defaults: Any,
+        **defaults: object,
     ) -> None:
-        self.model = model
+        self.model: str = model
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        self._http = httpx.Client(base_url=base_url, headers=headers, timeout=timeout)
-        self._defaults: dict[str, Any] = defaults
+        self._http: httpx.Client = httpx.Client(base_url=base_url, headers=headers, timeout=timeout)
+        self._defaults: dict[str, object] = defaults
 
     def _post(self, request: LLMRequest, *, stream: bool) -> dict[str, Any]:
         body = _build_payload(request, stream=stream)
@@ -123,11 +125,11 @@ class LLMClient:
     def invoke(self, request: LLMRequest) -> LLMResponse:
         resp = self._http.post("/chat/completions", json=self._post(request, stream=False))
         resp.raise_for_status()
-        return _parse_completion_response(resp.json())
+        return _parse_completion_response(cast(dict[str, Any], resp.json()))
 
     def stream(self, request: LLMRequest) -> Iterator[LLMStreamEvent]:
         body = self._post(request, stream=True)
-        tool_call_acc: dict[int, dict[str, Any]] = {}
+        tool_call_acc: dict[int, dict[str, str]] = {}
         with self._http.stream("POST", "/chat/completions", json=body) as resp:
             resp.raise_for_status()
             for line in resp.iter_lines():
@@ -136,5 +138,5 @@ class LLMClient:
                 data = line[5:].strip()
                 if data == _DONE:
                     break
-                yield from _parse_chunk(json.loads(data), tool_call_acc)
+                yield from _parse_chunk(cast(dict[str, Any], json.loads(data)), tool_call_acc)
         yield LLMStreamEvent(type="done", tool_calls=_finish_tool_calls(tool_call_acc))
