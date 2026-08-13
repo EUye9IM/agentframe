@@ -91,11 +91,10 @@ Agent（公共类，可继承 + 可组合）
 | 类别 | 钩子 | 说明 |
 |------|------|------|
 | trace | `before_trace` / `after_trace` | 整个回合前后 |
-| turn | `before_turn` / `after_turn` | 每次 LLM 调用前后 |
+| turn | `before_turn` / `after_turn` | 一次 LLM 调用（含其工具输出）前后；`after_turn` 可改写本 turn 消息并写回 |
 | LLM | `before_llm` / `on_llm_reasoning` / `on_reasoning_end` / `on_llm_content` / `on_content_end` / `after_llm` | 请求可改、流式事件、响应转消息历史 |
-| 工具 | `before_tool_call` / `after_tool_result` | 审批子集、结果转消息历史 |
+| 工具 | `before_tool_call` / `after_tool_result` | 审批子集、结果转消息历史（含 `tool_call_id`） |
 | 流程 | `handle_next` / `handle_error` | 状态机决策与错误改道 |
-| 事件 | `on_state_changed` | 每次消息追加 |
 
 ## 文档
 

@@ -24,12 +24,6 @@ class _AgentGraph(Protocol):
     ) -> AgentState: ...
 
 
-def _copy_state(state: AgentState) -> AgentState:
-    # 浅拷贝：dict 复制，但 messages 列表仍与真实 state 共享。
-    # 中间件不应原地改 data["messages"]；这是刻意的，避免每回合深拷贝开销。
-    return cast(AgentState, cast(object, dict(state)))
-
-
 class StreamStop(Exception):
     """Raised by a streaming hook to interrupt generation.
 
@@ -58,7 +52,6 @@ class BaseAgent(Middleware):
         self._llm_client: LLMClientProtocol = llm_client
         self._graph: _AgentGraph | None = None
         self._tools: dict[str, Callable[..., Any]] = {}
-        self._last_tool_call_id: str = ""
 
     # ------------------------------------------------------------------
     # LLM client access (swappable by middleware for model routing)
@@ -81,7 +74,7 @@ class BaseAgent(Middleware):
     # ------------------------------------------------------------------
 
     def _act_llm(self, state: AgentState) -> dict[str, Any]:
-        data = self.before_turn(_copy_state(state))
+        data = self.before_turn(list(state["messages"]))
         request = self.before_llm(self._build_request(data))
         full = ""
         reasoning = ""
@@ -117,8 +110,7 @@ class BaseAgent(Middleware):
         )
         messages = self.after_llm(response)
         if not tool_calls:
-            self.after_turn(_copy_state(state))
-        self._notify_state_changed(messages)
+            messages = self.after_turn(messages)
         return {"messages": messages}
 
     @staticmethod
@@ -143,13 +135,9 @@ class BaseAgent(Middleware):
         approved = self.before_tool_call(last.tool_calls)
         out: list[BaseMessage] = []
         for tc in approved:
-            self._last_tool_call_id = tc["id"] or ""
             result_str = str(self._dispatch_tool(tc["name"], tc["args"]))
-            out.extend(self.after_tool_result(tc["name"], result_str))
-        self._last_tool_call_id = ""
-        self.after_turn(_copy_state(state))
-        self._notify_state_changed(out)
-        return {"messages": out}
+            out.extend(self.after_tool_result(tc["name"], result_str, tc["id"] or ""))
+        return {"messages": self.after_turn([last, *out])}
 
     def _dispatch_tool(self, name: str, arguments: dict[str, Any]) -> str:
         tool = self._tools.get(name)
@@ -160,11 +148,8 @@ class BaseAgent(Middleware):
     def register_tool(self, fn: Callable[..., Any], *, name: str | None = None) -> None:
         self._tools[name or fn.__name__] = fn
 
-    def _notify_state_changed(self, messages: list[BaseMessage]) -> None:
-        self.on_state_changed(messages)
-
-    def _build_request(self, data: AgentState) -> LLMRequest:
-        return LLMRequest(messages=list(data["messages"]))
+    def _build_request(self, messages: list[BaseMessage]) -> LLMRequest:
+        return LLMRequest(messages=messages)
 
     def _route_after_llm(self, state: AgentState) -> str:
         has_tools = False

@@ -162,10 +162,10 @@ class LLMClient:
 
 | 钩子 | 签名 | 类型 | 触发点 |
 |------|------|------|--------|
-| `before_trace` | `(input: str, session: str\|None) -> str` | 变换 | invoke() 入口（唯一入口），可改写输入 |
-| `after_trace` | `(data: AgentState, session: str\|None) -> str` | 变换 | invoke() 出口，取最后一条 AI 消息（首轮失败时无 AI 消息则返回空串，不回显用户输入） |
-| `before_turn` | `(data: AgentState) -> AgentState` | 变换 | 每个回合（LLM 调用）开始 |
-| `after_turn` | `(data: AgentState) -> AgentState` | 变换 | TOOLS 结束 / 无工具时 LLM 结束 |
+| `before_trace` | `(input: str, session_id: str\|None) -> str` | 变换 | invoke() 入口（唯一入口），可改写输入 |
+| `after_trace` | `(data: AgentState, session_id: str\|None) -> str` | 变换 | invoke() 出口，取最后一条 AI 消息（首轮失败时无 AI 消息则返回空串，不回显用户输入） |
+| `before_turn` | `(messages: list[BaseMessage]) -> list[BaseMessage]` | 变换 | 每次 LLM 调用前；入参 = 当前完整消息列表，返回值仅用于构造本轮请求，不写回 state |
+| `after_turn` | `(messages: list[BaseMessage]) -> list[BaseMessage]` | 变换 | 一次 LLM 调用（含其工具输出）结束后；入参 = 本 turn 将写入历史的新消息（有工具时含 [AIMessage, ToolMessage...]），返回值真正写回 state |
 | `before_llm` | `(request: LLMRequest) -> LLMRequest` | 变换 | LLM 调用前，可改请求体（messages/tools/temperature...） |
 | `on_llm_reasoning` | `(text: str) -> None` | 事件/流式 | 每段 reasoning 流 |
 | `on_reasoning_end` | `(reasoning: str) -> None` | 事件 | 思考结束，通知完整思考内容 |
@@ -173,10 +173,9 @@ class LLMClient:
 | `on_content_end` | `(content: str) -> None` | 事件 | 消息结束，通知完整消息内容 |
 | `after_llm` | `(response: LLMResponse) -> list[BaseMessage]` | 变换 | 响应转消息历史，可控制顺序 |
 | `before_tool_call` | `(tool_calls: list[dict]) -> list[dict]` | 变换 | 工具执行前，返回审批子集 |
-| `after_tool_result` | `(name: str, result: str) -> list[BaseMessage]` | 变换 | 每个工具执行后，结果转消息历史 |
+| `after_tool_result` | `(name: str, result: str, tool_call_id: str) -> list[BaseMessage]` | 变换 | 每个工具执行后，结果转消息历史（`tool_call_id` 须回填到返回的 ToolMessage） |
 | `handle_next` | `(from_node: Phase, default: Phase) -> Phase` | 流程 | 条件边决策 |
-| `handle_error` | `(error: NodeError, node: Phase) -> Command` | 流程 | 错误处理，修复状态 + 改道 |
-| `on_state_changed` | `(messages: list[BaseMessage]) -> None` | 事件 | 每次消息追加 |
+| `handle_error` | `(error: NodeError, node: Phase) -> Command` | 流程 | 错误处理，修复状态 + 改道（原始异常在 `error.error`） |
 
 ### 6.3 `after_llm` / `after_tool_result`：响应/结果 → 消息历史
 
@@ -195,9 +194,9 @@ class MyAgent(BaseAgent):
             return [AIMessage(content=f"[thinking]\n{response.reasoning}")] + base
         return base
 
-def after_tool_result(self, name: str, result: str) -> list[BaseMessage]:
+def after_tool_result(self, name: str, result: str, tool_call_id: str) -> list[BaseMessage]:
     """工具结果 → 消息历史。默认包成一条 ToolMessage。"""
-    return [ToolMessage(content=result, tool_call_id=self._last_call_id)]
+    return [ToolMessage(content=result, tool_call_id=tool_call_id)]
 ```
 
 ### 6.4 流式中断（StreamStop 异常 + handle_error）

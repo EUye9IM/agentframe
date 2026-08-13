@@ -27,7 +27,7 @@ class TestStateTransitions:
         agent = make_agent([[content("hi"), done()]])
         result = agent.invoke("hello")
         assert result == "hi"
-        log = [e for e in agent.log if e != "on_state_changed"]
+        log = list(agent.log)
         assert log == [
             "before_trace",
             "before_turn",
@@ -84,4 +84,53 @@ class TestStateTransitions:
         agent.register_tool(_echo_hi)
         agent.invoke("go")
         assert agent.log.count("after_tool_result:echo_hi") == 1
-        assert agent.log.count("on_state_changed") >= 3
+
+    def test_after_turn_sees_full_turn_messages(self, make_agent):
+        seen = {}
+
+        def after_turn(messages):
+            seen.setdefault("turns", []).append([type(m).__name__ for m in messages])
+            return messages
+
+        agent = make_agent(
+            [
+                [content("tool"), done(tool_calls=_bash_tool_call("c1"))],
+                [content("final"), done()],
+            ],
+            hooks={"after_turn": after_turn},
+        )
+        agent.register_tool(_echo_hi)
+        agent.invoke("go")
+        # 有工具回合收到 [AIMessage, ToolMessage]，收尾无工具回合只收到 AIMessage
+        assert ["AIMessage", "ToolMessage"] in seen["turns"]
+        assert ["AIMessage"] in seen["turns"]
+
+    def test_after_turn_can_edit_tool_message(self, make_agent):
+        from langchain_core.messages import ToolMessage
+
+        seen = {}
+
+        def after_turn(messages):
+            out: list[Any] = []
+            for m in messages:
+                if isinstance(m, ToolMessage):
+                    m = ToolMessage(content="redacted", tool_call_id=m.tool_call_id)
+                out.append(m)
+            return out
+
+        def before_llm(request):
+            seen["saw_redacted"] = any(
+                isinstance(m, ToolMessage) and m.content == "redacted" for m in request.messages
+            )
+            return request
+
+        agent = make_agent(
+            [
+                [content("tool"), done(tool_calls=_bash_tool_call("c1"))],
+                [content("final"), done()],
+            ],
+            hooks={"after_turn": after_turn, "before_llm": before_llm},
+        )
+        agent.register_tool(_echo_hi)
+        agent.invoke("go")
+        assert seen["saw_redacted"] is True

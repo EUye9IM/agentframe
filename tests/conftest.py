@@ -81,24 +81,24 @@ class RecordingAgent(BaseAgent):
         return cast(ScriptedLLMClient, self._llm_client).requests
 
     @override
-    def before_trace(self, input_text: str, session: str | None) -> str:
+    def before_trace(self, input_text: str, session_id: str | None) -> str:
         self.log.append("before_trace")
-        return super().before_trace(input_text, session)
+        return super().before_trace(input_text, session_id)
 
     @override
-    def after_trace(self, data: AgentState, session: str | None) -> str:
+    def after_trace(self, data: AgentState, session_id: str | None) -> str:
         self.log.append("after_trace")
-        return super().after_trace(data, session)
+        return super().after_trace(data, session_id)
 
     @override
-    def before_turn(self, data: AgentState) -> AgentState:
+    def before_turn(self, messages: list[BaseMessage]) -> list[BaseMessage]:
         self.log.append("before_turn")
-        return super().before_turn(data)
+        return super().before_turn(messages)
 
     @override
-    def after_turn(self, data: AgentState) -> AgentState:
+    def after_turn(self, messages: list[BaseMessage]) -> list[BaseMessage]:
         self.log.append("after_turn")
-        return super().after_turn(data)
+        return super().after_turn(messages)
 
     @override
     def before_llm(self, request: LLMRequest) -> LLMRequest:
@@ -136,9 +136,9 @@ class RecordingAgent(BaseAgent):
         return super().before_tool_call(tool_calls)
 
     @override
-    def after_tool_result(self, name: str, result: str) -> list[BaseMessage]:
+    def after_tool_result(self, name: str, result: str, tool_call_id: str) -> list[BaseMessage]:
         self.log.append(f"after_tool_result:{name}")
-        return super().after_tool_result(name, result)
+        return super().after_tool_result(name, result, tool_call_id)
 
     @override
     def handle_next(self, from_node: Phase, default: Phase) -> Phase:
@@ -149,11 +149,6 @@ class RecordingAgent(BaseAgent):
     def handle_error(self, error: NodeError, node: str) -> Command[Phase]:
         self.log.append("handle_error")
         return super().handle_error(error, node)
-
-    @override
-    def on_state_changed(self, messages: list[BaseMessage]) -> None:
-        self.log.append("on_state_changed")
-        super().on_state_changed(messages)
 
 
 @pytest.fixture

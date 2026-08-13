@@ -126,3 +126,49 @@ class TestErrors:
         )
         agent.invoke("go")
         assert handled["reasoning"] == "think-halt"
+
+    def test_tool_error_then_retry_keeps_correct_tool_call_id(self, make_agent):
+        from langchain_core.messages import ToolMessage
+        from langgraph.types import Command
+
+        seen = {}
+
+        def ok_tool() -> str:
+            return "ok"
+
+        def boom_tool() -> str:
+            raise RuntimeError("boom")
+
+        def after_tool_result(name, result, tool_call_id):
+            seen.setdefault("ids", []).append((name, tool_call_id))
+            return [ToolMessage(content=result, tool_call_id=tool_call_id)]
+
+        def handle_error(error, node):
+            return Command(goto=Phase.LLM)
+
+        agent = make_agent(
+            [
+                [
+                    content("t1"),
+                    done(
+                        tool_calls=[
+                            {"id": "c1", "name": "ok_tool", "arguments": {}},
+                            {"id": "c2", "name": "boom_tool", "arguments": {}},
+                        ]
+                    ),
+                ],
+                [
+                    content("t2"),
+                    done(tool_calls=[{"id": "c3", "name": "ok_tool", "arguments": {}}]),
+                ],
+                [content("final"), done()],
+            ],
+            hooks={"after_tool_result": after_tool_result, "handle_error": handle_error},
+        )
+        agent.register_tool(ok_tool)
+        agent.register_tool(boom_tool)
+        result = agent.invoke("go")
+        # 第二个工具在 dispatch 阶段抛异常(不走 after_tool_result)→ handle_error
+        # 改道 LLM 重试；每次 after_tool_result 都拿到当次工具的正确 id，无残留
+        assert result == "final"
+        assert seen["ids"] == [("ok_tool", "c1"), ("ok_tool", "c3")]
