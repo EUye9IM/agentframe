@@ -377,10 +377,11 @@ agentframe/
     client.py            # LLMClient：裸 httpx，invoke/stream
     types.py             # LLMRequest / LLMResponse / LLMStreamEvent / Usage
   middlewares/
-    __init__.py          # 工厂：tools / mcp / compress / memory
-    tools.py             # ToolsMiddleware
-    mcp.py               # MCPMiddleware
-    compression.py       # CompressionMiddleware
+    __init__.py          # 工厂：log（tools / mcp / compress / memory 规划中）
+    logging.py           # log(logger)：标准 logging 记录 trace/turn/llm/tool/error 关键事件
+    tools.py             # ToolsMiddleware（规划）
+    mcp.py               # MCPMiddleware（规划）
+    compression.py       # CompressionMiddleware（规划）
     memory.py            # MemoryMiddleware（未实现；会话持久化已内置于基类 checkpointer）
   tools/
     registry.py
@@ -403,6 +404,7 @@ pyproject.toml           # version 0.2.0，去 pytest-asyncio
 | mcp | `MCPMiddleware` 同上，分发走线程桥 | ✅ |
 | compress | `CompressionMiddleware.before_llm` 从 messages 估大小，超阈值摘要 | ✅ |
 | 会话 memory | 基类内置：`checkpointer`（默认 `InMemorySaver`）+ `session_id`（构造参数，默认 `"default"`，映射 thread_id） | ✅ |
+| 日志/观测 | `LoggingMiddleware`：`log(logger)` 记录 trace/turn/llm/tool/error（含耗时、token 用量、session_id） | ✅ |
 | 长期 memory | 中间件持外部 Store，`before_turn` 注入 / `after_turn` 写回 | ❌ 未实现 |
 | LangGraph 原生持久化 | 内置默认内存持久化；逃生口 = 换 `agent.checkpointer` 为任意 `BaseCheckpointSaver` | ✅ |
 | model 切换 | 中间件换 `self.llm_client`（model 归端点） | ✅ |

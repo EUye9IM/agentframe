@@ -46,18 +46,20 @@ agent2.invoke("hi")
 agent2.invoke("继续")   # 带上轮上下文
 ```
 
-组合中间件（工厂函数返回中间件类，需实例化；`agentframe.middlewares` 仍在实现中，以下为规划 API）：
+组合中间件（工厂函数返回中间件类，需实例化）：
 
 ```python
+import logging
+
 from agentframe import Agent, LLMClient
-from agentframe.middlewares import tools  # 尚未实现，模块存在后可用
+from agentframe.middlewares import log
 
 client = LLMClient(model="deepseek-chat", base_url="...", api_key="...")
 
 agent = Agent(
     llm_client=client,
     middlewares=[
-        tools([my_function])(),   # 工具
+        log(logging.getLogger("agent"))(),   # 关键事件日志（trace/turn/llm/tool/error）
     ],
 )
 ```

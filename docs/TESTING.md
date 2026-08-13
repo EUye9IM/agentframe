@@ -153,6 +153,16 @@ class RecordingAgent(BaseAgent):
 |---|------|------|
 | 43 | agent 层 usage/finish_reason 透传 | `after_llm` 收到的 `response.usage` / `response.finish_reason` 由流式 `done` 事件填充（A2 回归） |
 
+### T9 日志中间件（tests/test_logging.py）
+
+> 手段：标准 `logging.Logger` + pytest `caplog`；工厂 `log(logger)()`，事件经 `super()` 续链。
+
+| # | 场景 | 断言 |
+|---|------|------|
+| 44 | 无工具 invoke | 记录 `trace start/end`、`turn start/end`、`llm`（含 session_id） |
+| 45 | 带工具 invoke | 记录 `tool start`（调用前，name/id 列表）与 `tool end`（执行后，result_len） |
+| 46 | 客户端抛异常 | 记录 `error` 事件（node / 异常类型 / 消息） |
+
 ## 3. 运行
 
 ```bash
