@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["basedpyright >= 1.39"]
+dev = ["pytest >= 8", "basedpyright >= 1.39"]
 
 [project.scripts]
 afcli = "agentframe.cli.main:main"
