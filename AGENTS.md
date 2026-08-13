@@ -24,7 +24,6 @@ AgentFrame v0.2: a **pure-sync**, hook-driven agent framework on LangGraph. Mast
 - Run all tests: `.venv/bin/python -m pytest tests/ -q` (currently 25, all pass).
 - Run one test file: `.venv/bin/python -m pytest tests/test_errors.py -q`.
 - Type check: `.venv/bin/basedpyright agentframe/ tests/` (installed by `uv sync --extra dev`). Syntax-only fallback: `.venv/bin/python -m compileall -q agentframe/ tests/`.
-- **This proot environment quirk**: basedpyright's bundled node needs its shared libs on the loader path or it fails with `Error loading shared library libstdc++...`. Run it as `LD_LIBRARY_PATH=.venv/lib/python3.12/site-packages/nodejs_wheel_binaries.libs .venv/bin/basedpyright agentframe/` here. Not needed on a normal Linux/glibc box.
 - Code style: **annotate all types** on public signatures (explicit function/parameter/return annotations), `from __future__ import annotations`, no comments unless they explain non-obvious design rationale.
 
 ## Tests (`tests/`, see `docs/TESTING.md`)
