@@ -27,6 +27,19 @@ def _sse_data(chunk: dict[str, Any]) -> str:
     return f"data: {json.dumps(chunk)}\n"
 
 
+def _capturing_transport(captured: dict[str, Any]) -> httpx.MockTransport:
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(
+            200,
+            content=b'{"choices": [{"message": {"role": "assistant", "content": "ok"}}]}',
+            request=request,
+        )
+
+    return httpx.MockTransport(handle)
+
+
 def _request() -> LLMRequest:
     return LLMRequest(messages=[HumanMessage(content="q")])
 
@@ -92,6 +105,45 @@ class TestInvoke:
         client = _make_client([json.dumps(body)])
         resp = client.invoke(_request())
         assert resp.message.tool_calls[0]["args"] == {}
+
+    def test_payload_carries_tools_temperature_max_tokens(self):
+        captured: dict[str, Any] = {}
+        client = LLMClient(base_url="http://test", model="m", transport=_capturing_transport(captured))
+        req = LLMRequest(
+            messages=[HumanMessage(content="q")],
+            tools=[{"type": "function", "function": {"name": "echo"}}],
+            temperature=0.5,
+            max_tokens=64,
+        )
+        client.invoke(req)
+        assert captured["body"]["tools"] == [{"type": "function", "function": {"name": "echo"}}]
+        assert captured["body"]["temperature"] == 0.5
+        assert captured["body"]["max_tokens"] == 64
+        assert captured["body"]["model"] == "m"
+        assert captured["body"]["stream"] is False
+
+    def test_api_key_sets_authorization_header(self):
+        captured: dict[str, Any] = {}
+        client = LLMClient(
+            base_url="http://test", model="m", api_key="sk-test", transport=_capturing_transport(captured)
+        )
+        client.invoke(_request())
+        assert captured["headers"]["authorization"] == "Bearer sk-test"
+
+    def test_defaults_merged_request_values_win(self):
+        captured: dict[str, Any] = {}
+        client = LLMClient(
+            base_url="http://test",
+            model="m",
+            transport=_capturing_transport(captured),
+            temperature=0.9,
+            top_p=1.0,
+        )
+        req = LLMRequest(messages=[HumanMessage(content="q")], temperature=0.2)
+        client.invoke(req)
+        assert captured["body"]["temperature"] == 0.2
+        assert captured["body"]["top_p"] == 1.0
+        assert captured["body"]["model"] == "m"
 
 class TestStream:
     def test_content_events_and_usage_from_final_chunk(self):
@@ -207,6 +259,38 @@ class TestStream:
         )
         events = list(client.stream(_request()))
         assert events[-1].tool_calls == [{"id": "c1", "name": "echo", "arguments": {}}]
+
+    def test_tool_call_without_arguments_parses_to_empty(self):
+        client = _make_client(
+            [
+                _sse_data(
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [{"index": 0, "id": "c1", "function": {"name": "echo"}}]
+                                }
+                            }
+                        ]
+                    }
+                ),
+                "data: [DONE]\n",
+            ]
+        )
+        events = list(client.stream(_request()))
+        assert events[-1].tool_calls == [{"id": "c1", "name": "echo", "arguments": {}}]
+
+    def test_stream_skips_blank_and_non_data_lines(self):
+        client = _make_client(
+            [
+                "\n",
+                "event: ping\n",
+                _sse_data({"choices": [{"delta": {"content": "hi"}}]}),
+                "data: [DONE]\n",
+            ]
+        )
+        events = list(client.stream(_request()))
+        assert [(e.type, e.content) for e in events if e.type != "done"] == [("content", "hi")]
 
 
 class TestLifecycle:

@@ -131,20 +131,25 @@ class RecordingAgent(BaseAgent):
 | 30 | reasoning 多厂商字段 | `reasoning_content`/`reasoning`/`reasoning_text` 均产生 `reasoning` 事件 |
 | 31 | tool_calls 分片聚合 | 多分片 id/name/arguments 拼接后进 `done.tool_calls` |
 | 32 | 截断流式 arguments | 安全解析为 `{}` |
-| 33 | 生命周期 | `close()` 幂等；上下文管理器可用 |
+| 33 | 无 arguments 的 tool_calls | 空字符串安全解析为 `{}` |
+| 34 | SSE 干扰行 | 空行 / `event:` 非 data 行被跳过，content 正常产出 |
+| 35 | 请求体携带 tools/temperature/max_tokens | body 中字段正确透传，`stream` 标志正确 |
+| 36 | `api_key` | 请求头带 `Authorization: Bearer <key>` |
+| 37 | `defaults` 合并 | 默认参数进 body，request 显式字段优先 |
+| 38 | 生命周期 | `close()` 幂等；上下文管理器可用 |
 
 ### T7 错误语义（tests/test_errors.py 补充）
 
 | # | 场景 | 断言 |
 |---|------|------|
-| 34 | 首轮失败 `invoke` 结果 | 返回空串，不回显用户输入（B1 回归） |
-| 35 | reasoning 阶段 `StreamStop` | `partial_reasoning` 含中断触发分片（B4 回归） |
+| 39 | 首轮失败 `invoke` 结果 | 返回空串，不回显用户输入（B1 回归） |
+| 40 | reasoning 阶段 `StreamStop` | `partial_reasoning` 含中断触发分片（B4 回归） |
 
 ### T8 补齐覆盖（test_hooks.py / test_invoke_api.py）
 
 | # | 场景 | 断言 |
 |---|------|------|
-| 36 | agent 层 usage/finish_reason 透传 | `after_llm` 收到的 `response.usage` / `response.finish_reason` 由流式 `done` 事件填充（A2 回归） |
+| 41 | agent 层 usage/finish_reason 透传 | `after_llm` 收到的 `response.usage` / `response.finish_reason` 由流式 `done` 事件填充（A2 回归） |
 
 ## 3. 运行
 

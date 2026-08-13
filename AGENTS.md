@@ -23,7 +23,7 @@ AgentFrame v0.2: a **pure-sync**, hook-driven agent framework on LangGraph. Mast
 ## Commands
 
 - Install: `uv sync --extra dev`. Python 3.12 (`.python-version`).
-- Run all tests: `.venv/bin/python -m pytest tests/ -q` (currently 42, all pass).
+- Run all tests: `.venv/bin/python -m pytest tests/ -q` (currently 47, all pass).
 - Run one test file: `.venv/bin/python -m pytest tests/test_errors.py -q`.
 - Type check: `.venv/bin/basedpyright agentframe/ tests/` (installed by `uv sync --extra dev`). Rule calibration lives in `pyproject.toml [tool.basedpyright]` (noise rules off; `tests/` via `executionEnvironments` keeps unknown-* rules off). Syntax-only fallback: `.venv/bin/python -m compileall -q agentframe/ tests/`.
 - Code style: **annotate all types** on public signatures (explicit function/parameter/return annotations), `from __future__ import annotations`, no comments unless they explain non-obvious design rationale.
