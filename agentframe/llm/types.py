@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from langchain_core.messages import AIMessage, BaseMessage
 
@@ -45,10 +45,11 @@ class LLMResponse:
 class LLMStreamEvent:
     """Streaming event yielded by LLMClient.stream()."""
 
-    type: str  # "reasoning" | "content" | "done"
+    type: Literal["reasoning", "content", "done"]
     content: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     usage: Usage | None = None
+    finish_reason: str | None = None
 
 
 class LLMClientProtocol(Protocol):

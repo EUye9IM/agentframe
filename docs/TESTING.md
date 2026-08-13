@@ -113,6 +113,30 @@ class RecordingAgent(BaseAgent):
 | 21 | `compile_kwargs={"checkpointer": InMemorySaver()}` + 同 `config` thread_id 两次 invoke | 历史跨会话延续（原生持久化逃生口） |
 | 22 | 编译后图 | 节点含 LLM/TOOLS，entry 为 LLM |
 
+### T6 LLMClient 解析（tests/test_llm_client.py）
+
+> 范围：`LLMClient` 的纯解析函数与流式协议（非流式 `invoke()` 与 SSE `stream()`）。
+> 手段：`httpx.MockTransport` 注入，无真实网络；`LLMClient(transport=...)` 构造。
+
+| # | 场景 | 断言 |
+|---|------|------|
+| 23 | `invoke()` 解析非流式响应 | content / usage / finish_reason / model 正确映射 |
+| 24 | `invoke()` tool_calls | 转 langchain `args` 格式（A4 回归），`finish_reason="tool_calls"` |
+| 25 | tool_calls arguments 截断 | 安全解析为 `{}`，不抛 `ValueError` |
+| 26 | `stream()` 流式 content + 末帧 usage | `done` 事件携带聚合后的 usage（A2 回归） |
+| 27 | `stream()` finish_reason | content 分片携带的 `finish_reason` 透传到 `done` |
+| 28 | reasoning 多厂商字段 | `reasoning_content`/`reasoning`/`reasoning_text` 均产生 `reasoning` 事件 |
+| 29 | tool_calls 分片聚合 | 多分片 id/name/arguments 拼接后进 `done.tool_calls` |
+| 30 | 截断流式 arguments | 安全解析为 `{}` |
+| 31 | 生命周期 | `close()` 幂等；上下文管理器可用 |
+
+### T7 错误语义（tests/test_errors.py 补充）
+
+| # | 场景 | 断言 |
+|---|------|------|
+| 32 | 首轮失败 `invoke` 结果 | 返回空串，不回显用户输入（B1 回归） |
+| 33 | reasoning 阶段 `StreamStop` | `partial_reasoning` 含中断触发分片（B4 回归） |
+
 ## 3. 运行
 
 ```bash

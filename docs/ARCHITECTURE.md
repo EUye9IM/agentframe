@@ -162,8 +162,8 @@ class LLMClient:
 
 | 钩子 | 签名 | 类型 | 触发点 |
 |------|------|------|--------|
-| `before_trace` | `(input: str, session: str\|None) -> str` | 变换 | invoke() 入口，可改写输入 |
-| `after_trace` | `(data: AgentState, session: str\|None) -> str` | 变换 | invoke() 出口，可改写结果 |
+| `before_trace` | `(input: str, session: str\|None) -> str` | 变换 | invoke() 入口（仅文本入口；stream/invoke_messages 不触发），可改写输入 |
+| `after_trace` | `(data: AgentState, session: str\|None) -> str` | 变换 | invoke()/invoke_messages() 出口，取最后一条 AI 消息（首轮失败时无 AI 消息则返回空串，不回显用户输入） |
 | `before_turn` | `(data: AgentState) -> AgentState` | 变换 | 每个回合（LLM 调用）开始 |
 | `after_turn` | `(data: AgentState) -> AgentState` | 变换 | TOOLS 结束 / 无工具时 LLM 结束 |
 | `before_llm` | `(request: LLMRequest) -> LLMRequest` | 变换 | LLM 调用前，可改请求体（messages/tools/temperature...） |
@@ -208,7 +208,8 @@ def after_tool_result(self, name: str, result: str) -> list[BaseMessage]:
 class StreamStop(Exception):
     def __init__(self, message: str = "", goto: Phase = Phase.END):
         self.message, self.goto = message, goto
-        self.partial: str = ""
+        self.partial: str = ""            # 已累计的 content
+        self.partial_reasoning: str = ""  # 已累计的 reasoning
 
 def on_llm_content(self, text):          # 纯事件，无返回值
     if self._budget_exceeded():
@@ -218,20 +219,23 @@ def on_llm_content(self, text):          # 纯事件，无返回值
 ```python
 def _act_llm(self, state):
     request = self.before_llm(self._build_request(state["messages"]))
-    full, tool_calls, usage = "", [], None
+    full, reasoning, tool_calls, usage, finish_reason = "", "", [], None, None
     try:
         for event in self.llm_client.stream(request):
-            if event.type == "reasoning": self.on_llm_reasoning(event.content)
+            if event.type == "reasoning":
+                reasoning += event.content; self.on_llm_reasoning(event.content)
             elif event.type == "content":
                 self.on_llm_content(event.content); full += event.content
-            elif event.type == "done": tool_calls, usage = event.tool_calls, event.usage
+            elif event.type == "done":
+                tool_calls, usage, finish_reason = event.tool_calls, event.usage, event.finish_reason
     except StreamStop as stop:
         stop.partial = full                      # partial 内容挂到异常上
+        stop.partial_reasoning = reasoning       # 思考内容一并保留
         raise
     except KeyboardInterrupt:
         raise StreamStop()
-    self.on_reasoning_end(request_reasoning_accumulated)   # 思考结束事件
-    self.on_content_end(full)                               # 消息结束事件
+    self.on_reasoning_end(reasoning)             # 思考结束事件
+    self.on_content_end(full)                    # 消息结束事件
     response = LLMResponse(message=AIMessage(content=full, tool_calls=tool_calls or []),
                            usage=usage, model=self.llm_client.model)
     return {"messages": self.after_llm(response)}
@@ -355,9 +359,9 @@ my = MyChat(llm_client=client, middlewares=[memory()])
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `invoke` | `(input_text, *, session_id=None, config=None) -> str` | 同步执行；`config` 原样透传 `graph.invoke`（checkpointer/interrupt 逃生口） |
-| `stream` | `(input_text, *, session_id=None, config=None) -> Iterator[dict]` | 图事件流，调用方可外部停止 |
-| `invoke_messages` | `(messages, *, session_id=None, config=None) -> str` | 显式消息列表（multiagent 用） |
+| `invoke` | `(input_text, *, session_id=None, config=None) -> str` | 同步执行，包在 before_trace/after_trace 内；`config` 原样透传 `graph.invoke`（checkpointer/interrupt 逃生口） |
+| `stream` | `(input_text, *, session_id=None, config=None) -> Iterator[dict]` | 图级事件流（调试/逃生口），绕过 trace 钩子；流式体验走 `on_llm_content`/`on_llm_reasoning` 事件钩子 |
+| `invoke_messages` | `(messages, *, session_id=None, config=None) -> str` | 显式消息列表（multiagent 用），出口走 after_trace |
 
 ## 9. 模块布局
 

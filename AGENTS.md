@@ -12,17 +12,18 @@ AgentFrame v0.2: a **pure-sync**, hook-driven agent framework on LangGraph. Mast
 - **State is deliberately thin**: `AgentState = {messages}` only. No token counters, no error fields. Errors flow via LangGraph `NodeError` → `error_handler` → `handle_error(error, node) -> Command(goto=...)` (never through state/messages).
 - **Persistence is not built in** — it's an escape hatch. `compile_kwargs` (e.g. `compile_kwargs={"checkpointer": InMemorySaver()}`) is passed verbatim to `workflow.compile(**...)`; `config` (`RunnableConfig | None`) on `invoke`/`stream`/`invoke_messages` is passed verbatim to the graph call. `session_id` is only a hook-carried key (`before_trace`/`after_trace`) — it is **not** mapped to a LangGraph `thread_id`, so checkpointer use requires passing `config={"configurable": {"thread_id": ...}}` yourself.
 - Hooks (`core/hooks.py`, 15 sync hooks): `before_*`/`after_*` = transforms (return modified data), `on_*` = events (no return), `handle_next`/`handle_error` = flow. `after_llm` and `after_tool_result` return `list[BaseMessage]` — they own converting response→history, subclasses call `super()` then reorder.
-- Streaming hooks (`on_llm_reasoning`/`on_llm_content`) are **pure events** (no bool). Interruption = raise `StreamStop`; `_act_llm` attaches `partial` and re-raises; the interrupter's own middleware `handle_error` override claims it. Base `handle_error` is uniform (`Command(goto=END)`), never type-switches.
+- **Trace lifecycle**: `before_trace`/`after_trace` bracket `invoke`; `invoke_messages` (no text input) exits via `after_trace` only; `stream` (graph-level debug API) bypasses trace hooks and `session_id` is a placeholder there. `after_trace` returns the **last AI message's** content (empty string if none — a first-turn failure must not echo the user's own input back).
+- Streaming hooks (`on_llm_reasoning`/`on_llm_content`) are **pure events** (no bool). Interruption = raise `StreamStop`; `_act_llm` attaches `partial` (+ `partial_reasoning`) and re-raises; the interrupter's own middleware `handle_error` override claims it. Base `handle_error` is uniform (`Command(goto=END)`), never type-switches.
 
 ## LLM layer
 
-- `LLMClient` (`agentframe/llm/client.py`) is **raw httpx**, no openai SDK: struct-in/struct-out (`LLMRequest` → `LLMResponse`; `stream` yields `LLMStreamEvent`). SSE parsed manually. The client owns `model` (it's the model-bound endpoint); `LLMRequest` carries no model, and `_act_llm` fills `LLMResponse.model` from `self.llm_client.model`.
+- `LLMClient` (`agentframe/llm/client.py`) is **raw httpx**, no openai SDK: struct-in/struct-out (`LLMRequest` → `LLMResponse`; `stream` yields `LLMStreamEvent`). SSE parsed manually. The client owns `model` (it's the model-bound endpoint); `LLMRequest` carries no model, and `_act_llm` fills `LLMResponse.model` from `self.llm_client.model`. Streaming `done` event carries aggregated `tool_calls` + `usage` + `finish_reason`; reasoning deltas accept `reasoning_content`/`reasoning`/`reasoning_text`.
 - **Gotcha**: tool_calls format differs — OpenAI uses `arguments`, langchain `AIMessage` needs `args`. `BaseAgent._to_langchain_tool_calls` handles it; `_act_tools` reads `tc["args"]`. If you see "Unsupported message type" / duplicate-base / KeyError in the graph, it's usually a tool_calls format or middleware instance-vs-class bug.
 
 ## Commands
 
 - Install: `uv sync --extra dev`. Python 3.12 (`.python-version`).
-- Run all tests: `.venv/bin/python -m pytest tests/ -q` (currently 25, all pass).
+- Run all tests: `.venv/bin/python -m pytest tests/ -q` (currently 37, all pass).
 - Run one test file: `.venv/bin/python -m pytest tests/test_errors.py -q`.
 - Type check: `.venv/bin/basedpyright agentframe/ tests/` (installed by `uv sync --extra dev`). Rule calibration lives in `pyproject.toml [tool.basedpyright]` (noise rules off; `tests/` via `executionEnvironments` keeps unknown-* rules off). Syntax-only fallback: `.venv/bin/python -m compileall -q agentframe/ tests/`.
 - Code style: **annotate all types** on public signatures (explicit function/parameter/return annotations), `from __future__ import annotations`, no comments unless they explain non-obvious design rationale.
@@ -36,6 +37,6 @@ AgentFrame v0.2: a **pure-sync**, hook-driven agent framework on LangGraph. Mast
 
 ## Repo-state gaps (implementation in progress)
 
-- `pyproject.toml` is **stale**: lists `openai` (unused — code uses `httpx`, add it to deps) and `afcli = agentframe.cli.main:main` (no `cli/` module yet). `mcp` dep declared but no MCP code yet.
+- `pyproject.toml` deps are aligned with code (`httpx`, no `openai`/`mcp`); `afcli` entry point removed until `cli/` exists.
 - `middlewares/`, `multiagent/`, `compression/`, `cli/` not implemented yet — only `core/` and `llm/` exist. `examples/` and `docs/` exist.
 - Design decisions deferred (do not implement unless asked): middleware custom states (Phase is closed), middleware-owned state channels (keep state thin), tool streaming hook `on_tool_stream`.

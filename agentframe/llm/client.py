@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from types import TracebackType
 from typing import Any, cast
 
 import httpx
@@ -28,6 +29,26 @@ def _build_payload(request: LLMRequest, *, stream: bool) -> dict[str, Any]:
     return payload
 
 
+def _parse_usage(data: dict[str, Any]) -> Usage | None:
+    usage_raw = cast(dict[str, Any], data.get("usage") or {})
+    if not usage_raw:
+        return None
+    return Usage(
+        prompt_tokens=cast(int, usage_raw.get("prompt_tokens", 0)),
+        completion_tokens=cast(int, usage_raw.get("completion_tokens", 0)),
+        total_tokens=cast(int, usage_raw.get("total_tokens", 0)),
+    )
+
+
+def _safe_parse_arguments(raw: str) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        return cast(dict[str, Any], json.loads(raw))
+    except ValueError:
+        return {}
+
+
 def _finish_tool_calls(acc: dict[int, dict[str, str]]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for idx in sorted(acc):
@@ -36,7 +57,7 @@ def _finish_tool_calls(acc: dict[int, dict[str, str]]) -> list[dict[str, Any]]:
             {
                 "id": tc["id"],
                 "name": tc["name"],
-                "arguments": json.loads(tc["arguments"]) if tc["arguments"] else {},
+                "arguments": _safe_parse_arguments(tc["arguments"]),
             }
         )
     return result
@@ -48,8 +69,10 @@ def _parse_chunk(data: dict[str, Any], tool_call_acc: dict[int, dict[str, str]])
     if not choices:
         return events
     delta = cast(dict[str, Any], choices[0].get("delta") or {})
-    if delta.get("reasoning_content"):
-        events.append(LLMStreamEvent(type="reasoning", content=cast(str, delta["reasoning_content"])))
+    for key in ("reasoning_content", "reasoning", "reasoning_text"):
+        if delta.get(key):
+            events.append(LLMStreamEvent(type="reasoning", content=cast(str, delta[key])))
+            break
     if delta.get("content"):
         events.append(LLMStreamEvent(type="content", content=cast(str, delta["content"])))
     if delta.get("tool_calls"):
@@ -77,18 +100,12 @@ def _parse_completion_response(data: dict[str, Any]) -> LLMResponse:
             {
                 "id": tc.get("id", ""),
                 "name": fn["name"],
-                "arguments": json.loads(cast(str, fn.get("arguments") or "{}")),
+                "args": _safe_parse_arguments(cast(str, fn.get("arguments") or "{}")),
+                "type": "tool_call",
             }
         )
     ai = AIMessage(content=cast(str, msg.get("content") or ""), tool_calls=tool_calls or [])
-    usage_raw = cast(dict[str, Any], data.get("usage") or {})
-    usage: Usage | None = None
-    if usage_raw:
-        usage = Usage(
-            prompt_tokens=cast(int, usage_raw.get("prompt_tokens", 0)),
-            completion_tokens=cast(int, usage_raw.get("completion_tokens", 0)),
-            total_tokens=cast(int, usage_raw.get("total_tokens", 0)),
-        )
+    usage = _parse_usage(data)
     return LLMResponse(
         message=ai,
         usage=usage,
@@ -106,14 +123,34 @@ class LLMClient:
         model: str,
         api_key: str | None = None,
         timeout: float = 120.0,
+        transport: httpx.BaseTransport | None = None,
         **defaults: object,
     ) -> None:
         self.model: str = model
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        self._http: httpx.Client = httpx.Client(base_url=base_url, headers=headers, timeout=timeout)
+        if transport is not None:
+            self._http: httpx.Client = httpx.Client(
+                base_url=base_url, headers=headers, timeout=timeout, transport=transport
+            )
+        else:
+            self._http = httpx.Client(base_url=base_url, headers=headers, timeout=timeout)
         self._defaults: dict[str, object] = defaults
+
+    def close(self) -> None:
+        self._http.close()
+
+    def __enter__(self) -> LLMClient:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
 
     def _post(self, request: LLMRequest, *, stream: bool) -> dict[str, Any]:
         body = _build_payload(request, stream=stream)
@@ -130,6 +167,8 @@ class LLMClient:
     def stream(self, request: LLMRequest) -> Iterator[LLMStreamEvent]:
         body = self._post(request, stream=True)
         tool_call_acc: dict[int, dict[str, str]] = {}
+        usage: Usage | None = None
+        finish_reason: str | None = None
         with self._http.stream("POST", "/chat/completions", json=body) as resp:
             resp.raise_for_status()
             for line in resp.iter_lines():
@@ -138,5 +177,16 @@ class LLMClient:
                 data = line[5:].strip()
                 if data == _DONE:
                     break
-                yield from _parse_chunk(cast(dict[str, Any], json.loads(data)), tool_call_acc)
-        yield LLMStreamEvent(type="done", tool_calls=_finish_tool_calls(tool_call_acc))
+                chunk = cast(dict[str, Any], json.loads(data))
+                usage = _parse_usage(chunk) or usage
+                for choice in cast(list[dict[str, Any]], chunk.get("choices") or []):
+                    fr = choice.get("finish_reason")
+                    if fr:
+                        finish_reason = cast(str, fr)
+                yield from _parse_chunk(chunk, tool_call_acc)
+        yield LLMStreamEvent(
+            type="done",
+            tool_calls=_finish_tool_calls(tool_call_acc),
+            usage=usage,
+            finish_reason=finish_reason,
+        )

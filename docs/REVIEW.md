@@ -6,50 +6,50 @@
 
 ## 结论
 
-核心设计（极薄引擎 + 钩子协议 + LangGraph 状态机 + 结构体交换）实现干净、一致，类型注解强化后的代码质量良好。没有发现会导致核心流程崩溃的缺陷；问题集中在**包元数据失配、流式解析丢失信息、错误路径语义、测试覆盖缺口**四类。建议按「A 必修 / B 建议修 / C 一致性 / D 可维护性 / E 测试缺口」顺序处理。
+核心设计（极薄引擎 + 钩子协议 + LangGraph 状态机 + 结构体交换）实现干净、一致，类型注解强化后的代码质量良好。问题集中在**包元数据失配、流式解析丢失信息、错误路径语义、测试覆盖缺口**四类。均已按下列清单处理（✅ 已修）。
 
 ## A. 必修
 
-| # | 问题 | 位置 | 影响 |
+| # | 问题 | 位置 | 状态 |
 |---|------|------|------|
-| A1 | `pyproject.toml` 与代码脱节：用了 `httpx` 未声明，声明了未用的 `openai`；`afcli` 入口指向不存在的 `agentframe.cli.main` | pyproject.toml:8-12 | 装包缺依赖、入口坏 |
-| A2 | 流式 `usage` / `finish_reason` 丢失：`_parse_chunk` 在 `choices` 为空时提前 return，丢弃 OpenAI 系末帧（无 choices、带 usage）的 usage；`done` 事件从不填 `LLMStreamEvent.usage` | llm/client.py:48, 141 | `usage` 字段形同虚设 |
-| A3 | `_finish_tool_calls` 的 `json.loads` 无保护，供应商截断 tool_calls 时 arguments 残缺 → 流式抛 `ValueError` | llm/client.py:39 | 流式中途崩溃 |
+| A1 | `pyproject.toml` 与代码脱节：用了 `httpx` 未声明，声明了未用的 `openai`；`afcli` 入口指向不存在的 `agentframe.cli.main` | pyproject.toml | ✅ 对齐依赖，删 `afcli` 入口 |
+| A2 | 流式 `usage` / `finish_reason` 丢失：末帧（无 choices、带 usage）被丢弃，`done` 事件不填 usage | llm/client.py | ✅ `stream()` 捕获 usage/finish_reason 并入 `done` 事件；`_act_llm` 透传到 `LLMResponse` |
+| A3 | `_finish_tool_calls` 的 `json.loads` 无保护，截断的 tool_calls 会抛 `ValueError` | llm/client.py | ✅ `_safe_parse_arguments` 兜底（流式 + invoke 双路径） |
+| A4 | （评审后发现）`_parse_completion_response` 用 `arguments` 键构造 `AIMessage.tool_calls`，langchain-core 1.4.9 需 `args` → 非流式 `invoke()` 的 tool_calls 直接 TypeError | llm/client.py | ✅ 改产 `args` 格式，与 `_to_langchain_tool_calls` 一致 |
 
 ## B. 健壮性（建议修）
 
-| # | 问题 | 位置 | 影响 |
+| # | 问题 | 位置 | 状态 |
 |---|------|------|------|
-| B1 | LLM 首轮失败时 `invoke` 把用户输入当结果返回（`messages[-1]` 是 HumanMessage）；`invoke_messages([])` 直接 IndexError | core/base.py:23-24, 233 | 错误语义误导 |
-| B2 | `LLMClient` 无 `close()` / 上下文管理器，httpx 连接池不释放 | llm/client.py | 长驻进程连接泄漏 |
-| B3 | 推理字段只认 `reasoning_content`（DeepSeek 专属），`reasoning`/`reasoning_text` 不兼容 | llm/client.py:51 | 多厂商兼容性差 |
-| B4 | `StreamStop` 在 reasoning 阶段中断时 `partial` 不含 reasoning（只累计 content） | core/base.py:96-101 | 中断恢复丢失思考内容 |
+| B1 | LLM 首轮失败时 `invoke` 回显用户输入；`invoke_messages([])` IndexError | core/base.py | ✅ `after_trace` 取最后一条 AI 消息，无则空串；`invoke_messages` 走 `after_trace` |
+| B2 | `LLMClient` 无 `close()` / 上下文管理器，httpx 连接池不释放 | llm/client.py | ✅ 增加 `close()` + `__enter__`/`__exit__`，并支持注入 `transport` 以便测试 |
+| B3 | 推理字段只认 `reasoning_content`（DeepSeek 专属） | llm/client.py | ✅ 兼容 `reasoning`/`reasoning_text` |
+| B4 | `StreamStop` 中断时 `partial` 不含 reasoning | core/base.py | ✅ 新增 `partial_reasoning`，`_act_llm` 一并挂载 |
 
 ## C. API 一致性
 
-| # | 问题 | 位置 | 影响 |
+| # | 问题 | 位置 | 状态 |
 |---|------|------|------|
-| C1 | `invoke` 走 `before_trace`/`after_trace`，`stream`/`invoke_messages` 完全绕过且 `session_id` 形同虚设 | core/base.py:207-240 | 生命周期语义不一致 |
-| C2 | `stream()` 返回 LangGraph 原始 state dict，与 `on_llm_content` 是两套流式通道，且零测试 | core/base.py:220-229 | 通道冗余、易误用 |
-| C3 | README 的 `from agentframe.middlewares import tools, memory` import 即挂（模块不存在） | README.md:47 | 文档示例不可运行 |
+| C1 | `invoke` 走 trace 钩子，`stream`/`invoke_messages` 绕过且 `session_id` 形同虚设 | core/base.py | ✅ `invoke_messages` 出口走 `after_trace`；`stream` 明确文档化为图级调试 API（绕过 trace） |
+| C2 | `stream()` 返回 LangGraph 原始 state dict，与 `on_llm_content` 两套流式通道 | core/base.py | ✅ 文档化，`on_llm_*` 事件钩子为主流式通道 |
+| C3 | README 的 `from agentframe.middlewares import tools, memory` import 即挂 | README.md | ✅ 标注为规划 API（模块未实现） |
 
 ## D. 可维护性
 
-| # | 问题 | 位置 |
-|---|------|------|
-| D1 | `LLMStreamEvent.type` 是裸 `str`，与 `Phase` StrEnum 风格不一致，建议 `Literal` | llm/types.py:48 |
-| D2 | `_act_llm` 中 `full`/`reasoning` 手工累计可收敛为小 accumulator | core/base.py:87-99 |
-| D3 | `_copy_state` 是浅拷贝，中间件原地改 `data["messages"]` 会污染真实状态（有文档提醒，保持现状 + 注释） | core/base.py:31-32 |
+| # | 问题 | 位置 | 状态 |
+|---|------|------|------|
+| D1 | `LLMStreamEvent.type` 是裸 `str` | llm/types.py | ✅ 改 `Literal["reasoning","content","done"]` |
+| D2 | `_act_llm` 手工累计可收敛为 accumulator | core/base.py | 保持现状（已随 A2 增加 usage/finish_reason 透传，结构清晰） |
+| D3 | `_copy_state` 浅拷贝语义未显式说明 | core/base.py | ✅ 加注释说明共享 list 为刻意取舍 |
 
 ## E. 测试缺口
 
-| # | 缺口 | 影响 |
+| # | 缺口 | 状态 |
 |---|------|------|
-| E1 | `LLMClient` 无任何测试：`_parse_chunk` / `_parse_completion_response` / SSE 解析 / tool_calls 聚合 / usage 全是纯函数 | 非流式 `invoke()` 路径零覆盖 |
-| E2 | `stream()` 无测试 | C2 行为无固化 |
-| E3 | 错误路径回显行为无测试固化 | B1 无回归保护 |
+| E1 | `LLMClient` 无测试 | ✅ 新增 `tests/test_llm_client.py`（invoke 解析 / SSE 流式 / usage/finish_reason / tool_calls 聚合与截断 / lifecycle），并借此发现并修复 A4 |
+| E2 | `stream()` 无测试 | ✅ LLMClient 层覆盖；图级 `stream()` 保留为调试 API |
+| E3 | 错误路径回显行为无固化 | ✅ `test_first_turn_failure_does_not_echo_user_input` + `test_streamstop_keeps_partial_reasoning` |
 
-## 已确认通过
+## 修复后基线
 
-- 25 个测试全过；basedpyright 0 error。
-- 未提交 diff（类型注解强化：`RunnableConfig`、`_AgentGraph` Protocol、`cast`、`@override`）质量良好，可提交。
+- 37 个测试全过；basedpyright 0 error。

@@ -40,11 +40,11 @@ agent = Agent(
 print(agent.invoke("你好"))
 ```
 
-组合中间件（工厂函数返回中间件类，需实例化）：
+组合中间件（工厂函数返回中间件类，需实例化；`agentframe.middlewares` 仍在实现中，以下为规划 API）：
 
 ```python
 from agentframe import Agent, LLMClient
-from agentframe.middlewares import tools, memory
+from agentframe.middlewares import tools, memory  # 尚未实现，模块存在后可用
 
 client = LLMClient(model="deepseek-chat", base_url="...", api_key="...")
 
@@ -112,7 +112,7 @@ Agent（公共类，可继承 + 可组合）
 
 - ✅ 核心：`BaseAgent` / 钩子协议 / `Phase` 枚举 / `AgentState`
 - ✅ LLM 层：`LLMClient`（裸 httpx）/ `LLMRequest` / `LLMResponse` / `LLMStreamEvent`
-- ✅ 测试：25 个状态转换 / 钩子 / 错误处理用例
+- ✅ 测试：37 个用例（状态转换 / 钩子 / 错误处理 / LLMClient 解析）
 - 🚧 实现中：middlewares（tools/mcp/compress/memory）、multiagent、CLI、examples
 
 ## License

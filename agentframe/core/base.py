@@ -12,7 +12,7 @@ from langgraph.types import Command
 from .hooks import Middleware
 from .phases import Phase
 from .state import AgentState
-from ..llm.types import LLMClientProtocol, LLMRequest, LLMResponse
+from ..llm.types import LLMClientProtocol, LLMRequest, LLMResponse, Usage
 
 
 class _AgentGraph(Protocol):
@@ -29,6 +29,8 @@ class _AgentGraph(Protocol):
 
 
 def _copy_state(state: AgentState) -> AgentState:
+    # 浅拷贝：dict 复制，但 messages 列表仍与真实 state 共享。
+    # 中间件不应原地改 data["messages"]；这是刻意的，避免每回合深拷贝开销。
     return cast(AgentState, cast(object, dict(state)))
 
 
@@ -44,6 +46,7 @@ class StreamStop(Exception):
         self.message: str = message
         self.goto: Phase = goto
         self.partial: str = ""
+        self.partial_reasoning: str = ""
 
 
 class BaseAgent(Middleware):
@@ -87,6 +90,8 @@ class BaseAgent(Middleware):
         full = ""
         reasoning = ""
         tool_calls: list[dict[str, Any]] = []
+        usage: Usage | None = None
+        finish_reason: str | None = None
         try:
             for event in self.llm_client.stream(request):
                 if event.type == "reasoning":
@@ -97,8 +102,11 @@ class BaseAgent(Middleware):
                     self.on_llm_content(event.content)
                 elif event.type == "done":
                     tool_calls = event.tool_calls
+                    usage = event.usage
+                    finish_reason = event.finish_reason
         except StreamStop as stop:
             stop.partial = full
+            stop.partial_reasoning = reasoning
             raise
         except KeyboardInterrupt:
             raise StreamStop()
@@ -108,6 +116,8 @@ class BaseAgent(Middleware):
             message=AIMessage(content=full, tool_calls=self._to_langchain_tool_calls(tool_calls)),
             reasoning=reasoning,
             model=self.llm_client.model,
+            usage=usage,
+            finish_reason=finish_reason,
         )
         messages = self.after_llm(response)
         if not tool_calls:
@@ -211,6 +221,7 @@ class BaseAgent(Middleware):
         session_id: str | None = None,
         config: RunnableConfig | None = None,
     ) -> str:
+        """同步执行完整回合，包在 before_trace / after_trace 生命周期内。"""
         input_text = self.before_trace(input_text, session_id)
         self._ensure_graph()
         assert self._graph is not None
@@ -224,6 +235,11 @@ class BaseAgent(Middleware):
         session_id: str | None = None,
         config: RunnableConfig | None = None,
     ) -> Iterator[dict[str, Any]]:
+        """图级事件流（调试/逃生口用），逐节点产出原始 state dict。
+
+        与 `invoke` 不同：绕过 before_trace/after_trace，`session_id` 仅为
+        占位；主流的流式体验走 `on_llm_content` / `on_llm_reasoning` 事件钩子。
+        """
         self._ensure_graph()
         assert self._graph is not None
         yield from self._graph.stream(self._build_input(input_text), config=config)
@@ -235,7 +251,9 @@ class BaseAgent(Middleware):
         session_id: str | None = None,
         config: RunnableConfig | None = None,
     ) -> str:
+        """以显式消息列表执行（multiagent 用）。无文本输入，故不调 before_trace；
+        出口走 after_trace 统一收尾。"""
         self._ensure_graph()
         assert self._graph is not None
         state = self._graph.invoke({"messages": messages}, config=config)
-        return str(state["messages"][-1].content)
+        return self.after_trace(state, session_id)
