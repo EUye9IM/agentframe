@@ -52,14 +52,19 @@ agent2.invoke("继续")   # 带上轮上下文
 import logging
 
 from agentframe import Agent, LLMClient
-from agentframe.middlewares import log
+from agentframe.middlewares import log, tools
 
 client = LLMClient(model="deepseek-chat", base_url="...", api_key="...")
+
+def get_weather(city: str) -> str:
+    """查询城市天气。"""
+    return f"{city} 晴天"
 
 agent = Agent(
     llm_client=client,
     middlewares=[
         log(logging.getLogger("agent"))(),   # 关键事件日志（trace/turn/llm/tool/error）
+        tools([get_weather])(),              # 把工具反射成 schema 暴露给 LLM
     ],
 )
 ```

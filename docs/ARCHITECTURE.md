@@ -377,9 +377,9 @@ agentframe/
     client.py            # LLMClient：裸 httpx，invoke/stream
     types.py             # LLMRequest / LLMResponse / LLMStreamEvent / Usage
   middlewares/
-    __init__.py          # 工厂：log（tools / mcp / compress / memory 规划中）
+    __init__.py          # 工厂：log / tools（mcp / compress / memory 规划中）
     logging.py           # log(logger)：标准 logging 记录 trace/turn/llm/tool/error 关键事件
-    tools.py             # ToolsMiddleware（规划）
+    tools.py             # tools(functions)：注册 + 反射注入 request.tools，register/unregister 动态增删
     mcp.py               # MCPMiddleware（规划）
     compression.py       # CompressionMiddleware（规划）
     memory.py            # MemoryMiddleware（未实现；会话持久化已内置于基类 checkpointer）
@@ -400,9 +400,9 @@ pyproject.toml           # version 0.2.0，去 pytest-asyncio
 
 | 能力 | 机制 | 覆盖 |
 |------|------|------|
-| tools | `ToolsMiddleware.before_llm` 注入 + `before_tool_call` 审批 + 分发 | ✅ |
-| mcp | `MCPMiddleware` 同上，分发走线程桥 | ✅ |
-| compress | `CompressionMiddleware.before_llm` 从 messages 估大小，超阈值摘要 | ✅ |
+| tools | `tools(functions)`：`before_llm` 注册进 `_tools` 供分发 + 反射注入 schema；`register`/`unregister` 即时增删 | ✅ |
+| mcp | `MCPMiddleware` 同上，分发走线程桥 | ❌ 未实现 |
+| compress | `CompressionMiddleware.before_llm` 从 messages 估大小，超阈值摘要 | ❌ 未实现 |
 | 会话 memory | 基类内置：`checkpointer`（默认 `InMemorySaver`）+ `session_id`（构造参数，默认 `"default"`，映射 thread_id） | ✅ |
 | 日志/观测 | `LoggingMiddleware`：`log(logger)` 记录 trace/turn/llm/tool/error（含耗时、token 用量、session_id） | ✅ |
 | 长期 memory | 中间件持外部 Store，`before_turn` 注入 / `after_turn` 写回 | ❌ 未实现 |

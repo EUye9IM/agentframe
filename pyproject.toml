@@ -29,6 +29,6 @@ reportUnusedCallResult = "none"
 
 # tests/ 故意保持松类型（本地中间件违反 dataclass 类型等），unknown 类规则按路径校准
 executionEnvironments = [
-  { root = "tests", extraPaths = ["."], reportMissingParameterType = "none", reportUnknownParameterType = "none", reportUnknownVariableType = "none", reportUnknownMemberType = "none", reportUnknownArgumentType = "none" },
+  { root = "tests", extraPaths = ["."], reportMissingParameterType = "none", reportUnknownParameterType = "none", reportUnknownVariableType = "none", reportUnknownMemberType = "none", reportUnknownArgumentType = "none", reportAny = "none" },
   { root = "." },
 ]

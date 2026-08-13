@@ -163,6 +163,18 @@ class RecordingAgent(BaseAgent):
 | 45 | 带工具 invoke | 记录 `tool start`（调用前，name/id 列表）与 `tool end`（执行后，result_len） |
 | 46 | 客户端抛异常 | 记录 `error` 事件（node / 异常类型 / 消息） |
 
+### T10 工具中间件（tests/test_tools.py）
+
+> 手段：工厂 `tools([fn])()`，`before_llm` 反射 docstring/注解成 schema 注入 `request.tools`。
+
+| # | 场景 | 断言 |
+|---|------|------|
+| 47 | 注入 schema | `request.tools` 含 `{type: function, function: {name/description/parameters}}`，required 来自无默认值参数 |
+| 48 | 自动注册 + 分发 | LLM 返回 tool_call → 工具执行 → ToolMessage 进历史 |
+| 49 | 动态增 | `register(fn)` 后 invoke，`request.tools` 含新工具 |
+| 50 | 动态删 | `unregister(name)` 后 invoke，schema 与 `_tools` 均移除该工具 |
+| 51 | 边界 | 无 docstring → `description=""`；无参函数 → `parameters: {properties: {}}` |
+
 ## 3. 运行
 
 ```bash
