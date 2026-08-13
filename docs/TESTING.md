@@ -107,14 +107,16 @@ class RecordingAgent(BaseAgent):
 
 ### T5 公共 API（tests/test_invoke_api.py）
 
-> `invoke` 是唯一公开入口（文本入、str 出）；历史场景 = checkpointer + `config` thread_id。
+> `invoke` 是唯一公开入口（文本入、str 出）；历史场景 = `session_id` 构造参数（checkpointer 默认内存 InMemorySaver，session 映射 thread_id 自动恢复）。
 
 | # | 场景 | 断言 |
 |---|------|------|
 | 21 | `invoke(input_text)` | 历史首条为 SystemMessage（有 system_prompt）/ HumanMessage |
-| 22 | 同 thread_id 两轮 invoke + checkpointer | 历史跨回合延续：第二轮请求带前轮 AIMessage；system 按 id 去重不重复 |
-| 23 | 不同 thread_id | 历史互不可见，隔离生效 |
-| 24 | 编译后图 | 节点含 LLM/TOOLS，entry 为 LLM |
+| 22 | 同 session_id 两轮 invoke | 历史跨回合延续：第二轮请求带前轮 AIMessage；system 按 id 去重不重复 |
+| 23 | 共享 checkpointer 不同 session_id | 历史互不可见，隔离生效 |
+| 24 | 共享 checkpointer 同 session_id | 跨 agent 实例共享历史（a2 首轮请求带 a1 写入内容） |
+| 25 | 自定义 checkpointer | 传入 saver 被采用，`agent.checkpointer is saver`，checkpoint 落库 |
+| 26 | 编译后图 | 节点含 LLM/TOOLS，entry 为 LLM |
 
 ### T6 LLMClient 解析（tests/test_llm_client.py）
 
@@ -123,33 +125,33 @@ class RecordingAgent(BaseAgent):
 
 | # | 场景 | 断言 |
 |---|------|------|
-| 25 | `invoke()` 解析非流式响应 | content / usage / finish_reason / model 正确映射 |
-| 26 | `invoke()` tool_calls | 转 langchain `args` 格式（A4 回归），`finish_reason="tool_calls"` |
-| 27 | tool_calls arguments 截断 | 安全解析为 `{}`，不抛 `ValueError` |
-| 28 | `stream()` 流式 content + 末帧 usage | `done` 事件携带聚合后的 usage（A2 回归） |
-| 29 | `stream()` finish_reason | content 分片携带的 `finish_reason` 透传到 `done` |
-| 30 | reasoning 多厂商字段 | `reasoning_content`/`reasoning`/`reasoning_text` 均产生 `reasoning` 事件 |
-| 31 | tool_calls 分片聚合 | 多分片 id/name/arguments 拼接后进 `done.tool_calls` |
-| 32 | 截断流式 arguments | 安全解析为 `{}` |
-| 33 | 无 arguments 的 tool_calls | 空字符串安全解析为 `{}` |
-| 34 | SSE 干扰行 | 空行 / `event:` 非 data 行被跳过，content 正常产出 |
-| 35 | 请求体携带 tools/temperature/max_tokens | body 中字段正确透传，`stream` 标志正确 |
-| 36 | `api_key` | 请求头带 `Authorization: Bearer <key>` |
-| 37 | `defaults` 合并 | 默认参数进 body，request 显式字段优先 |
-| 38 | 生命周期 | `close()` 幂等；上下文管理器可用 |
+| 27 | `invoke()` 解析非流式响应 | content / usage / finish_reason / model 正确映射 |
+| 28 | `invoke()` tool_calls | 转 langchain `args` 格式（A4 回归），`finish_reason="tool_calls"` |
+| 29 | tool_calls arguments 截断 | 安全解析为 `{}`，不抛 `ValueError` |
+| 30 | `stream()` 流式 content + 末帧 usage | `done` 事件携带聚合后的 usage（A2 回归） |
+| 31 | `stream()` finish_reason | content 分片携带的 `finish_reason` 透传到 `done` |
+| 32 | reasoning 多厂商字段 | `reasoning_content`/`reasoning`/`reasoning_text` 均产生 `reasoning` 事件 |
+| 33 | tool_calls 分片聚合 | 多分片 id/name/arguments 拼接后进 `done.tool_calls` |
+| 34 | 截断流式 arguments | 安全解析为 `{}` |
+| 35 | 无 arguments 的 tool_calls | 空字符串安全解析为 `{}` |
+| 36 | SSE 干扰行 | 空行 / `event:` 非 data 行被跳过，content 正常产出 |
+| 37 | 请求体携带 tools/temperature/max_tokens | body 中字段正确透传，`stream` 标志正确 |
+| 38 | `api_key` | 请求头带 `Authorization: Bearer <key>` |
+| 39 | `defaults` 合并 | 默认参数进 body，request 显式字段优先 |
+| 40 | 生命周期 | `close()` 幂等；上下文管理器可用 |
 
 ### T7 错误语义（tests/test_errors.py 补充）
 
 | # | 场景 | 断言 |
 |---|------|------|
-| 39 | 首轮失败 `invoke` 结果 | 返回空串，不回显用户输入（B1 回归） |
-| 40 | reasoning 阶段 `StreamStop` | `partial_reasoning` 含中断触发分片（B4 回归） |
+| 41 | 首轮失败 `invoke` 结果 | 返回空串，不回显用户输入（B1 回归） |
+| 42 | reasoning 阶段 `StreamStop` | `partial_reasoning` 含中断触发分片（B4 回归） |
 
 ### T8 补齐覆盖（test_hooks.py / test_invoke_api.py）
 
 | # | 场景 | 断言 |
 |---|------|------|
-| 41 | agent 层 usage/finish_reason 透传 | `after_llm` 收到的 `response.usage` / `response.finish_reason` 由流式 `done` 事件填充（A2 回归） |
+| 43 | agent 层 usage/finish_reason 透传 | `after_llm` 收到的 `response.usage` / `response.finish_reason` 由流式 `done` 事件填充（A2 回归） |
 
 ## 3. 运行
 

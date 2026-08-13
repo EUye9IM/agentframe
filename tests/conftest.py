@@ -5,6 +5,7 @@ from typing import Any, cast, override
 
 import pytest
 from langchain_core.messages import BaseMessage, ToolCall
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.errors import NodeError
 from langgraph.types import Command
 
@@ -64,12 +65,14 @@ class RecordingAgent(BaseAgent):
         raise_at: int | None = None,
         exc: BaseException | None = None,
         system_prompt: str | None = None,
-        compile_kwargs: dict[str, Any] | None = None,
+        checkpointer: BaseCheckpointSaver[Any] | None = None,
+        session_id: str = "default",
     ) -> None:
         super().__init__(
             llm_client=ScriptedLLMClient(scripts, model=model, raise_at=raise_at, exc=exc),
             system_prompt=system_prompt,
-            compile_kwargs=compile_kwargs,
+            checkpointer=checkpointer,
+            session_id=session_id,
         )
         self.log: list[str] = []
         if hooks:
@@ -81,12 +84,12 @@ class RecordingAgent(BaseAgent):
         return cast(ScriptedLLMClient, self._llm_client).requests
 
     @override
-    def before_trace(self, input_text: str, session_id: str | None) -> str:
+    def before_trace(self, input_text: str, session_id: str) -> str:
         self.log.append("before_trace")
         return super().before_trace(input_text, session_id)
 
     @override
-    def after_trace(self, data: AgentState, session_id: str | None) -> str:
+    def after_trace(self, data: AgentState, session_id: str) -> str:
         self.log.append("after_trace")
         return super().after_trace(data, session_id)
 
@@ -160,7 +163,8 @@ def make_agent() -> Callable[..., RecordingAgent]:
         raise_at: int | None = None,
         exc: BaseException | None = None,
         system_prompt: str | None = None,
-        compile_kwargs: dict[str, Any] | None = None,
+        checkpointer: BaseCheckpointSaver[Any] | None = None,
+        session_id: str = "default",
     ) -> RecordingAgent:
         return RecordingAgent(
             scripts=scripts,
@@ -168,7 +172,8 @@ def make_agent() -> Callable[..., RecordingAgent]:
             raise_at=raise_at,
             exc=exc,
             system_prompt=system_prompt,
-            compile_kwargs=compile_kwargs,
+            checkpointer=checkpointer,
+            session_id=session_id,
         )
 
     return _make

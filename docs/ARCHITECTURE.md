@@ -62,7 +62,7 @@ class AgentState(TypedDict):
 **设计决策**：
 - 只有 `messages` 是跨节点流转的领域数据。
 - 工具列表是 agent 配置（挂 `tool_registry`），不是流转数据。
-- system_prompt / session_id 是构造参数。
+- system_prompt / session_id / checkpointer 是构造参数（checkpointer 默认内存 InMemorySaver）。
 - **错误信息不走 state**：LangGraph 将失败以 `NodeError` 函数参数注入 `error_handler`，经 `handle_error` 钩子返回 `Command(update=..., goto=...)` 修复/改道。
 - **无 total_tokens / input_text**：压缩改为从 messages 无状态估算；输入在 `invoke()` 构造好 `[system, human]` 再进图。
 
@@ -162,8 +162,8 @@ class LLMClient:
 
 | 钩子 | 签名 | 类型 | 触发点 |
 |------|------|------|--------|
-| `before_trace` | `(input: str, session_id: str\|None) -> str` | 变换 | invoke() 入口（唯一入口），可改写输入 |
-| `after_trace` | `(data: AgentState, session_id: str\|None) -> str` | 变换 | invoke() 出口，取最后一条 AI 消息（首轮失败时无 AI 消息则返回空串，不回显用户输入） |
+| `before_trace` | `(input: str, session_id: str) -> str` | 变换 | invoke() 入口（唯一入口），可改写输入 |
+| `after_trace` | `(data: AgentState, session_id: str) -> str` | 变换 | invoke() 出口，取最后一条 AI 消息（首轮失败时无 AI 消息则返回空串，不回显用户输入） |
 | `before_turn` | `(messages: list[BaseMessage]) -> list[BaseMessage]` | 变换 | 每次 LLM 调用前；入参 = 当前完整消息列表，返回值仅用于构造本轮请求，不写回 state |
 | `after_turn` | `(messages: list[BaseMessage]) -> list[BaseMessage]` | 变换 | 一次 LLM 调用（含其工具输出）结束后；入参 = 本 turn 将写入历史的新消息（有工具时含 [AIMessage, ToolMessage...]），返回值真正写回 state |
 | `before_llm` | `(request: LLMRequest) -> LLMRequest` | 变换 | LLM 调用前，可改请求体（messages/tools/temperature...） |
@@ -346,6 +346,9 @@ agent = Agent(
     middlewares=[tools([run_bash]), mcp([{...}]), compress(100000), memory()],
 )
 agent.invoke("hi", session_id="s1")
+# session_id 已是构造参数：
+agent = Agent(llm_client=client, system_prompt="...", session_id="s1")
+agent.invoke("hi")
 
 # 继承式（自定义钩子）
 class MyChat(Agent):
@@ -358,7 +361,7 @@ my = MyChat(llm_client=client, middlewares=[memory()])
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `invoke` | `(input_text, *, session_id=None, config=None) -> str` | **唯一公开入口**：文本入、str 出，包在 before_trace/after_trace 内；`config` 原样透传 `graph.invoke`（checkpointer 逃生口）；流式体验走 `on_llm_content`/`on_llm_reasoning` 事件钩子 |
+| `invoke` | `(input_text) -> str` | **唯一公开入口**：文本入、str 出，包在 before_trace/after_trace 内；`session_id`（构造参数，默认 `"default"`）内部映射为 LangGraph `thread_id`，同 session 经 checkpointer 沿用之前上下文恢复；逃生口 = 改 `agent.checkpointer`；流式体验走 `on_llm_content`/`on_llm_reasoning` 事件钩子 |
 
 ## 9. 模块布局
 
@@ -378,7 +381,7 @@ agentframe/
     tools.py             # ToolsMiddleware
     mcp.py               # MCPMiddleware
     compression.py       # CompressionMiddleware
-    memory.py            # MemoryMiddleware（session_id → Store，未实现）
+    memory.py            # MemoryMiddleware（未实现；会话持久化已内置于基类 checkpointer）
   tools/
     registry.py
     function_tool.py
@@ -399,9 +402,9 @@ pyproject.toml           # version 0.2.0，去 pytest-asyncio
 | tools | `ToolsMiddleware.before_llm` 注入 + `before_tool_call` 审批 + 分发 | ✅ |
 | mcp | `MCPMiddleware` 同上，分发走线程桥 | ✅ |
 | compress | `CompressionMiddleware.before_llm` 从 messages 估大小，超阈值摘要 | ✅ |
-| 会话 memory | `MemoryMiddleware`：session_id → Store（before_turn 注入 / after_turn 写回） | ❌ 未实现 |
+| 会话 memory | 基类内置：`checkpointer`（默认 `InMemorySaver`）+ `session_id`（构造参数，默认 `"default"`，映射 thread_id） | ✅ |
 | 长期 memory | 中间件持外部 Store，`before_turn` 注入 / `after_turn` 写回 | ❌ 未实现 |
-| LangGraph 原生持久化 | 逃生口：`compile_kwargs={"checkpointer": ...}` + `invoke(..., config={"configurable": {"thread_id": ...}})` | ✅ |
+| LangGraph 原生持久化 | 内置默认内存持久化；逃生口 = 换 `agent.checkpointer` 为任意 `BaseCheckpointSaver` | ✅ |
 | model 切换 | 中间件换 `self.llm_client`（model 归端点） | ✅ |
 | 子 Agent / multiagent | 子 Agent 包成 FunctionTool；multiagent 成员经 `invoke` + 独立 checkpointer 线程隔离历史 | ✅ |
 | 错误重试 | `handle_error` → `Command(goto)` + `retry_policy` | ✅ |

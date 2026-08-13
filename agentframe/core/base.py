@@ -5,6 +5,8 @@ from typing import Any, Protocol, cast
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import Runnable, RunnableConfig
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import NodeError
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command
@@ -45,10 +47,14 @@ class BaseAgent(Middleware):
         *,
         llm_client: LLMClientProtocol,
         system_prompt: str | None = None,
-        compile_kwargs: dict[str, Any] | None = None,
+        checkpointer: BaseCheckpointSaver[Any] | None = None,
+        session_id: str = "default",
     ) -> None:
         self.system_prompt: str | None = system_prompt
-        self.compile_kwargs: dict[str, Any] = compile_kwargs or {}
+        self.checkpointer: BaseCheckpointSaver[Any] = (
+            checkpointer if checkpointer is not None else InMemorySaver()
+        )
+        self.session_id: str = session_id
         self._llm_client: LLMClientProtocol = llm_client
         self._graph: _AgentGraph | None = None
         self._tools: dict[str, Callable[..., Any]] = {}
@@ -176,8 +182,8 @@ class BaseAgent(Middleware):
         )
         workflow.add_edge(Phase.TOOLS, Phase.LLM)
         workflow.set_entry_point(Phase.LLM)
-        # compile_kwargs 是透传逃生口，参数不可静态定型
-        graph = workflow.compile(**self.compile_kwargs)  # pyright: ignore[reportAny, reportUnknownMemberType]
+        # checkpointer 是编译期唯一参数;session_id → thread_id 恢复历史
+        graph = workflow.compile(checkpointer=self.checkpointer)  # pyright: ignore[reportUnknownMemberType]
         self._graph = cast(_AgentGraph, cast(object, graph))
 
     def _ensure_graph(self) -> None:
@@ -195,16 +201,13 @@ class BaseAgent(Middleware):
         messages.append(HumanMessage(content=input_text))
         return {"messages": messages}
 
-    def invoke(
-        self,
-        input_text: str,
-        *,
-        session_id: str | None = None,
-        config: RunnableConfig | None = None,
-    ) -> str:
-        """同步执行完整回合，包在 before_trace / after_trace 生命周期内。"""
-        input_text = self.before_trace(input_text, session_id)
+    def invoke(self, input_text: str) -> str:
+        """同步执行完整回合，包在 before_trace / after_trace 生命周期内。
+        `session_id` 为构造参数，本调用映射为 LangGraph thread_id，
+        同 session 经 checkpointer 沿用之前上下文恢复。"""
+        input_text = self.before_trace(input_text, self.session_id)
         self._ensure_graph()
         assert self._graph is not None
+        config: RunnableConfig = {"configurable": {"thread_id": self.session_id}}
         state = self._graph.invoke(self._build_input(input_text), config=config)
-        return self.after_trace(state, session_id)
+        return self.after_trace(state, self.session_id)

@@ -38,13 +38,19 @@ agent = Agent(
 )
 
 print(agent.invoke("你好"))
+
+# 会话持久化内置（checkpointer 默认内存 InMemorySaver）：
+# 同 session_id 自动沿用之前上下文，无需手动传 config
+agent2 = Agent(llm_client=client, session_id="s1")
+agent2.invoke("hi")
+agent2.invoke("继续")   # 带上轮上下文
 ```
 
 组合中间件（工厂函数返回中间件类，需实例化；`agentframe.middlewares` 仍在实现中，以下为规划 API）：
 
 ```python
 from agentframe import Agent, LLMClient
-from agentframe.middlewares import tools, memory  # 尚未实现，模块存在后可用
+from agentframe.middlewares import tools  # 尚未实现，模块存在后可用
 
 client = LLMClient(model="deepseek-chat", base_url="...", api_key="...")
 
@@ -52,7 +58,6 @@ agent = Agent(
     llm_client=client,
     middlewares=[
         tools([my_function])(),   # 工具
-        memory(),                 # 会话持久化
     ],
 )
 ```
@@ -68,7 +73,7 @@ class MyAgent(Agent):
         print(content, end="", flush=True)
 
 client = LLMClient(model="deepseek-chat", base_url="...", api_key="...")
-agent = MyAgent(llm_client=client, middlewares=[memory()])
+agent = MyAgent(llm_client=client)
 ```
 
 ## 架构一览

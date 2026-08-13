@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
+
 from .core.base import BaseAgent
 from .core.hooks import Middleware
 from .llm.types import LLMClientProtocol
@@ -21,7 +23,8 @@ class Agent(BaseAgent):
         llm_client: LLMClientProtocol,
         system_prompt: str | None = None,
         middlewares: list[Middleware] | None = None,
-        compile_kwargs: dict[str, Any] | None = None,
+        checkpointer: BaseCheckpointSaver[Any] | None = None,
+        session_id: str = "default",
     ) -> None:
         mws = list(middlewares or [])
         if mws:
@@ -34,5 +37,6 @@ class Agent(BaseAgent):
         super().__init__(
             llm_client=llm_client,
             system_prompt=system_prompt,
-            compile_kwargs=compile_kwargs,
+            checkpointer=checkpointer,
+            session_id=session_id,
         )
