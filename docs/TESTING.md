@@ -137,6 +137,14 @@ class RecordingAgent(BaseAgent):
 | 32 | 首轮失败 `invoke` 结果 | 返回空串，不回显用户输入（B1 回归） |
 | 33 | reasoning 阶段 `StreamStop` | `partial_reasoning` 含中断触发分片（B4 回归） |
 
+### T8 补齐覆盖（test_hooks.py / test_invoke_api.py）
+
+| # | 场景 | 断言 |
+|---|------|------|
+| 34 | agent 层 usage/finish_reason 透传 | `after_llm` 收到的 `response.usage` / `response.finish_reason` 由流式 `done` 事件填充（A2 回归） |
+| 35 | `invoke_messages` 出口 | 走 `after_trace`：log 含 `after_trace`、不含 `before_trace`（C1 回归） |
+| 36 | `stream()` 绕过 trace | 不触发 `before_trace`/`after_trace`（C2 回归） |
+
 ## 3. 运行
 
 ```bash

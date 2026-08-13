@@ -88,6 +88,32 @@ class TestHookChain:
         agent.invoke("hello")
         assert agent.log.count("on_state_changed") == 1
 
+    def test_after_llm_receives_streamed_usage_and_finish_reason(self, make_agent):
+        from agentframe.llm.types import Usage
+
+        seen = {}
+
+        def after_llm(response):
+            seen["usage"] = response.usage
+            seen["finish_reason"] = response.finish_reason
+            return [response.message]
+
+        agent = make_agent(
+            [
+                [
+                    content("hi"),
+                    done(
+                        usage=Usage(prompt_tokens=3, completion_tokens=4, total_tokens=7),
+                        finish_reason="stop",
+                    ),
+                ]
+            ],
+            hooks={"after_llm": after_llm},
+        )
+        agent.invoke("go")
+        assert seen["usage"] == Usage(prompt_tokens=3, completion_tokens=4, total_tokens=7)
+        assert seen["finish_reason"] == "stop"
+
 
 class TestDynamicInheritance:
     def test_mro_order_follows_list_order(self):

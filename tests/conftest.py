@@ -22,8 +22,12 @@ def reasoning(text: str) -> LLMStreamEvent:
     return LLMStreamEvent(type="reasoning", content=text)
 
 
-def done(tool_calls: list[dict[str, Any]] | None = None, usage: Usage | None = None) -> LLMStreamEvent:
-    return LLMStreamEvent(type="done", tool_calls=tool_calls or [], usage=usage)
+def done(
+    tool_calls: list[dict[str, Any]] | None = None,
+    usage: Usage | None = None,
+    finish_reason: str | None = None,
+) -> LLMStreamEvent:
+    return LLMStreamEvent(type="done", tool_calls=tool_calls or [], usage=usage, finish_reason=finish_reason)
 
 
 class ScriptedLLMClient:

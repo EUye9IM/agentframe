@@ -23,7 +23,7 @@ AgentFrame v0.2: a **pure-sync**, hook-driven agent framework on LangGraph. Mast
 ## Commands
 
 - Install: `uv sync --extra dev`. Python 3.12 (`.python-version`).
-- Run all tests: `.venv/bin/python -m pytest tests/ -q` (currently 37, all pass).
+- Run all tests: `.venv/bin/python -m pytest tests/ -q` (currently 40, all pass).
 - Run one test file: `.venv/bin/python -m pytest tests/test_errors.py -q`.
 - Type check: `.venv/bin/basedpyright agentframe/ tests/` (installed by `uv sync --extra dev`). Rule calibration lives in `pyproject.toml [tool.basedpyright]` (noise rules off; `tests/` via `executionEnvironments` keeps unknown-* rules off). Syntax-only fallback: `.venv/bin/python -m compileall -q agentframe/ tests/`.
 - Code style: **annotate all types** on public signatures (explicit function/parameter/return annotations), `from __future__ import annotations`, no comments unless they explain non-obvious design rationale.
@@ -31,6 +31,7 @@ AgentFrame v0.2: a **pure-sync**, hook-driven agent framework on LangGraph. Mast
 ## Tests (`tests/`, see `docs/TESTING.md`)
 
 - No real network/LLM. `tests/conftest.py` provides `ScriptedLLMClient` (pre-scripted `LLMStreamEvent` sequences per call, `raise_at`/`exc` to inject failures), `RecordingAgent` (logs every hook call then `super()`s), and `make_agent` fixture. Helpers `content()`/`reasoning()`/`done()` build events.
+- **Every code change that is testable and worth testing must ship with a regression test in the same commit.** Bug fixes get a test that fails before the fix and passes after; behavior changes get a test pinning the new semantics.
 - Hook overrides in tests are passed as `hooks={"before_llm": fn}` — plain functions bound to the instance (no `self`), NOT via `RecordingAgent` subclasses. The `hooks` dict overrides replace `RecordingAgent`'s logging for that hook.
 - `_act_llm` accumulates content **before** calling `on_llm_content`, so a `StreamStop` raised in the hook includes the triggering chunk in `partial`.
 - LLMClient's `stream` is always used by `_act_llm`; a fake client needs a `model` attribute + `stream` implemented.

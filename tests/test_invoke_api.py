@@ -30,6 +30,19 @@ class TestInvokeApi:
         assert len(req.messages) == 1
         assert req.messages[0].content == "custom"
 
+    def test_invoke_messages_exits_through_after_trace(self, make_agent):
+        agent = make_agent([[content("hi"), done()]])
+        result = agent.invoke_messages([HumanMessage(content="custom")])
+        assert result == "hi"
+        assert "after_trace" in agent.log
+        assert "before_trace" not in agent.log
+
+    def test_stream_bypasses_trace_hooks(self, make_agent):
+        agent = make_agent([[content("hi"), done()]])
+        list(agent.stream("go"))
+        assert "before_trace" not in agent.log
+        assert "after_trace" not in agent.log
+
     def test_session_persistence_via_compile_kwargs_checkpointer(self, make_agent):
         agent = make_agent(
             [[content("first"), done()], [content("second"), done()]],
