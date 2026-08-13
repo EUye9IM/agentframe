@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **Keep this file in sync with the code.** If you change architecture, hooks, commands, test infra, dependencies, or implement something listed under "Repo-state gaps", update this file in the same change. Stale AGENTS.md misleads every future session.
+
 AgentFrame v0.2: a **pure-sync**, hook-driven agent framework on LangGraph. Master branch is the active v0.2 rewrite; `dev` holds the frozen v0.1 monolith (tagged v0.1.0) — do not port dev code into master; reference it only for behavior ideas.
 
 ## Architecture (read `docs/ARCHITECTURE.md` first)
