@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from .core.base import BaseAgent
+from .llm.types import LLMClientProtocol
 
 
 class Agent(BaseAgent):
@@ -15,13 +16,11 @@ class Agent(BaseAgent):
 
     def __init__(
         self,
-        model: str,
         *,
+        llm_client: LLMClientProtocol,
         system_prompt: str | None = None,
         middlewares: list[Any] | None = None,
         checkpointer: Any | None = None,
-        llm_client: Any | None = None,
-        **kwargs: Any,
     ) -> None:
         mws = list(middlewares or [])
         if mws:
@@ -29,11 +28,9 @@ class Agent(BaseAgent):
             Concrete = type(
                 "_ConcreteAgent", (*[type(m) for m in mws][::-1], type(self)), {}
             )
-            self.__class__ = Concrete
+            self.__class__ = cast(Any, Concrete)
         super().__init__(
-            model,
+            llm_client=llm_client,
             system_prompt=system_prompt,
             checkpointer=checkpointer,
-            llm_client=llm_client,
-            **kwargs,
         )

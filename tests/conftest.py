@@ -17,7 +17,7 @@ def reasoning(text: str) -> LLMStreamEvent:
     return LLMStreamEvent(type="reasoning", content=text)
 
 
-def done(tool_calls: list[dict] | None = None, usage: Usage | None = None) -> LLMStreamEvent:
+def done(tool_calls: list[dict[str, Any]] | None = None, usage: Usage | None = None) -> LLMStreamEvent:
     return LLMStreamEvent(type="done", tool_calls=tool_calls or [], usage=usage)
 
 
@@ -26,9 +26,11 @@ class ScriptedLLMClient:
         self,
         scripts: list[list[LLMStreamEvent]],
         *,
+        model: str = "test-model",
         raise_at: int | None = None,
         exc: BaseException | None = None,
     ) -> None:
+        self.model = model
         self.scripts = list(scripts)
         self.requests: list[LLMRequest] = []
         self.raise_at = raise_at
@@ -37,6 +39,7 @@ class ScriptedLLMClient:
     def stream(self, request: LLMRequest) -> Iterator[LLMStreamEvent]:
         self.requests.append(request)
         if self.raise_at is not None and len(self.requests) == self.raise_at:
+            assert self.exc is not None
             raise self.exc
         for event in self.scripts.pop(0):
             yield event
@@ -57,8 +60,9 @@ class RecordingAgent(BaseAgent):
         **kw,
     ) -> None:
         super().__init__(
-            model=model,
-            llm_client=ScriptedLLMClient(scripts, raise_at=raise_at, exc=exc),
+            llm_client=ScriptedLLMClient(
+                scripts, model=model, raise_at=raise_at, exc=exc
+            ),
             **kw,
         )
         self.log: list[str] = []

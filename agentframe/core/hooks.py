@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import BaseMessage, ToolMessage
+from langchain_core.messages import BaseMessage, ToolCall, ToolMessage
 from langgraph.types import Command
 from langgraph.errors import NodeError
 
@@ -44,7 +44,7 @@ class Middleware:
     def after_llm(self, response: LLMResponse) -> list[BaseMessage]:
         return [response.message]
 
-    def before_tool_call(self, tool_calls: list[dict]) -> list[dict]:
+    def before_tool_call(self, tool_calls: list[ToolCall]) -> list[ToolCall]:
         return tool_calls
 
     def after_tool_result(self, name: str, result: str) -> list[BaseMessage]:
@@ -54,7 +54,7 @@ class Middleware:
     def handle_next(self, from_node: Phase, default: Phase) -> Phase:
         return default
 
-    def handle_error(self, error: NodeError, node: Phase) -> Command:
+    def handle_error(self, error: NodeError, node: str) -> Command[Phase]:
         return Command(goto=Phase.END)
 
     def on_state_changed(self, messages: list[BaseMessage]) -> None: ...

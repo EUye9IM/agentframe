@@ -4,6 +4,7 @@ from .agent import Agent
 from .core.base import BaseAgent, StreamStop
 from .core.hooks import Middleware
 from .core.phases import Phase
+from .llm.client import LLMClient
 from .llm.types import LLMRequest, LLMResponse, LLMStreamEvent, Usage
 
 __all__ = [
@@ -12,6 +13,7 @@ __all__ = [
     "Middleware",
     "StreamStop",
     "Phase",
+    "LLMClient",
     "LLMRequest",
     "LLMResponse",
     "LLMStreamEvent",

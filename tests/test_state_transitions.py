@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from typing import Any
+
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from .conftest import content, done
 
 
-def _bash_tool_call(tool_call_id: str = "call_1") -> list[dict]:
+def _bash_tool_call(tool_call_id: str = "call_1") -> list[dict[str, Any]]:
     return [
         {
             "id": tool_call_id,

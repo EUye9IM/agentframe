@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, cast
 
-from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 from langgraph.errors import NodeError
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command
@@ -11,8 +11,7 @@ from langgraph.types import Command
 from .hooks import Middleware
 from .phases import Phase
 from .state import AgentState
-from ..llm.client import LLMClient
-from ..llm.types import LLMRequest, LLMResponse
+from ..llm.types import LLMClientProtocol, LLMRequest, LLMResponse
 
 
 class StreamStop(Exception):
@@ -32,34 +31,28 @@ class StreamStop(Exception):
 class BaseAgent(Middleware):
     def __init__(
         self,
-        model: str,
         *,
+        llm_client: LLMClientProtocol,
         system_prompt: str | None = None,
         checkpointer: Any | None = None,
-        llm_client: LLMClient | None = None,
-        **kwargs: Any,
     ) -> None:
-        self.model: str = model
         self.system_prompt: str | None = system_prompt
         self.checkpointer: Any | None = checkpointer
-        self._llm_client = llm_client
-        self._kwargs = kwargs
+        self._llm_client: LLMClientProtocol = llm_client
         self._graph: Any = None
         self._tools: dict[str, Any] = {}
         self._last_tool_call_id: str = ""
 
     # ------------------------------------------------------------------
-    # LLM client access (overridable for model switching via middleware)
+    # LLM client access (swappable by middleware for model routing)
     # ------------------------------------------------------------------
 
     @property
-    def llm_client(self) -> LLMClient:
-        if self._llm_client is None:
-            self._llm_client = LLMClient(base_url="", **self._kwargs)
+    def llm_client(self) -> LLMClientProtocol:
         return self._llm_client
 
     @llm_client.setter
-    def llm_client(self, client: LLMClient) -> None:
+    def llm_client(self, client: LLMClientProtocol) -> None:
         self._llm_client = client
 
     # ------------------------------------------------------------------
@@ -70,13 +63,13 @@ class BaseAgent(Middleware):
     # Graph construction
     # ------------------------------------------------------------------
 
-    def _act_llm(self, state: AgentState) -> dict:
+    def _act_llm(self, state: AgentState) -> dict[str, Any]:
         data = dict(state)
         data = self.before_turn(data)
         request = self.before_llm(self._build_request(data))
         full = ""
         reasoning = ""
-        tool_calls: list[dict] = []
+        tool_calls: list[dict[str, Any]] = []
         try:
             for event in self.llm_client.stream(request):
                 if event.type == "reasoning":
@@ -97,7 +90,7 @@ class BaseAgent(Middleware):
         response = LLMResponse(
             message=AIMessage(content=full, tool_calls=self._to_langchain_tool_calls(tool_calls)),
             reasoning=reasoning,
-            model=request.model,
+            model=self.llm_client.model,
         )
         messages = self.after_llm(response)
         if not tool_calls:
@@ -106,7 +99,7 @@ class BaseAgent(Middleware):
         return {"messages": messages}
 
     @staticmethod
-    def _to_langchain_tool_calls(tool_calls: list[dict]) -> list[dict]:
+    def _to_langchain_tool_calls(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
         out = []
         for tc in tool_calls:
             out.append(
@@ -119,7 +112,7 @@ class BaseAgent(Middleware):
             )
         return out
 
-    def _act_tools(self, state: AgentState) -> dict:
+    def _act_tools(self, state: AgentState) -> dict[str, Any]:
         messages = list(state["messages"])
         last = messages[-1]
         if not isinstance(last, AIMessage) or not last.tool_calls:
@@ -127,15 +120,15 @@ class BaseAgent(Middleware):
         approved = self.before_tool_call(last.tool_calls)
         out: list[BaseMessage] = []
         for tc in approved:
-            self._last_tool_call_id = tc["id"]
-            result_str = str(self._dispatch_tool(tc["name"], tc.get("args", tc.get("arguments", {}))))
+            self._last_tool_call_id = tc["id"] or ""
+            result_str = str(self._dispatch_tool(tc["name"], tc["args"]))
             out.extend(self.after_tool_result(tc["name"], result_str))
         self._last_tool_call_id = ""
         self.after_turn(dict(state))
         self._notify_state_changed(out)
         return {"messages": out}
 
-    def _dispatch_tool(self, name: str, arguments: dict) -> str:
+    def _dispatch_tool(self, name: str, arguments: dict[str, Any]) -> str:
         tool = self._tools.get(name)
         if tool is None:
             return f"Error: tool '{name}' not found"
@@ -148,10 +141,7 @@ class BaseAgent(Middleware):
         self.on_state_changed(messages)
 
     def _build_request(self, data: AgentState) -> LLMRequest:
-        return LLMRequest(
-            model=self.model,
-            messages=list(data["messages"]),
-        )
+        return LLMRequest(messages=list(data["messages"]))
 
     def _route_after_llm(self, state: AgentState) -> str:
         has_tools = False
@@ -162,13 +152,15 @@ class BaseAgent(Middleware):
         default = Phase.TOOLS if has_tools else Phase.END
         return self.handle_next(Phase.LLM, default)
 
-    def _default_error_handler(self, state: AgentState, error: NodeError) -> Command:
+    def _default_error_handler(self, state: AgentState, error: NodeError) -> Command[Phase]:
         return self.handle_error(error, error.node)
 
     def _build_graph(self) -> None:
         workflow = StateGraph(AgentState)
-        workflow.add_node(Phase.LLM, self._act_llm, error_handler=self._default_error_handler)
-        workflow.add_node(Phase.TOOLS, self._act_tools, error_handler=self._default_error_handler)
+        # langgraph 通过依赖注入传入 (state, error)，但其 StateNode 类型存根只声明单参数
+        error_handler = cast(Any, self._default_error_handler)
+        workflow.add_node(Phase.LLM, self._act_llm, error_handler=error_handler)
+        workflow.add_node(Phase.TOOLS, self._act_tools, error_handler=error_handler)
         workflow.add_conditional_edges(
             Phase.LLM,
             self._route_after_llm,
@@ -186,7 +178,7 @@ class BaseAgent(Middleware):
     # Public API
     # ------------------------------------------------------------------
 
-    def _build_input(self, input_text: str) -> dict:
+    def _build_input(self, input_text: str) -> dict[str, Any]:
         messages: list[BaseMessage] = []
         if self.system_prompt:
             messages.append(SystemMessage(content=self.system_prompt, id="system"))
@@ -200,7 +192,7 @@ class BaseAgent(Middleware):
         state = self._graph.invoke(self._build_input(input_text), config=config)
         return self.after_trace(state, session_id)
 
-    def stream(self, input_text: str, *, session_id: str | None = None) -> Iterator[dict]:
+    def stream(self, input_text: str, *, session_id: str | None = None) -> Iterator[dict[str, Any]]:
         self._ensure_graph()
         config = self._make_config(session_id)
         yield from self._graph.stream(self._build_input(input_text), config=config)
@@ -212,7 +204,7 @@ class BaseAgent(Middleware):
         return state["messages"][-1].content
 
     @staticmethod
-    def _make_config(session_id: str | None) -> dict | None:
+    def _make_config(session_id: str | None) -> dict[str, Any] | None:
         if session_id is None:
             return None
         return {"configurable": {"thread_id": session_id}}

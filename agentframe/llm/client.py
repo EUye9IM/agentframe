@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import httpx
-from langchain_core.messages import BaseMessage, AIMessage
+from langchain_core.messages import AIMessage
 from langchain_core.messages.utils import convert_to_openai_messages
 
 from .types import LLMRequest, LLMResponse, LLMStreamEvent, Usage
@@ -13,9 +13,8 @@ from .types import LLMRequest, LLMResponse, LLMStreamEvent, Usage
 _DONE = "[DONE]"
 
 
-def _build_payload(request: LLMRequest, *, stream: bool) -> dict:
+def _build_payload(request: LLMRequest, *, stream: bool) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "model": request.model,
         "messages": convert_to_openai_messages(request.messages),
     }
     if request.tools:
@@ -29,7 +28,7 @@ def _build_payload(request: LLMRequest, *, stream: bool) -> dict:
     return payload
 
 
-def _finish_tool_calls(acc: dict[int, dict]) -> list[dict]:
+def _finish_tool_calls(acc: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
     result = []
     for idx in sorted(acc):
         tc = acc[idx]
@@ -43,7 +42,7 @@ def _finish_tool_calls(acc: dict[int, dict]) -> list[dict]:
     return result
 
 
-def _parse_chunk(data: dict, tool_call_acc: dict[int, dict]) -> list[LLMStreamEvent]:
+def _parse_chunk(data: dict[str, Any], tool_call_acc: dict[int, dict[str, Any]]) -> list[LLMStreamEvent]:
     events: list[LLMStreamEvent] = []
     choices = data.get("choices") or []
     if not choices:
@@ -67,7 +66,7 @@ def _parse_chunk(data: dict, tool_call_acc: dict[int, dict]) -> list[LLMStreamEv
     return events
 
 
-def _parse_completion_response(data: dict) -> LLMResponse:
+def _parse_completion_response(data: dict[str, Any]) -> LLMResponse:
     choice = (data.get("choices") or [{}])[0]
     msg = choice.get("message") or {}
     tool_calls = []
@@ -102,20 +101,23 @@ class LLMClient:
         self,
         *,
         base_url: str,
+        model: str,
         api_key: str | None = None,
         timeout: float = 120.0,
         **defaults: Any,
     ) -> None:
+        self.model = model
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         self._http = httpx.Client(base_url=base_url, headers=headers, timeout=timeout)
         self._defaults: dict[str, Any] = defaults
 
-    def _post(self, request: LLMRequest, *, stream: bool) -> dict:
+    def _post(self, request: LLMRequest, *, stream: bool) -> dict[str, Any]:
         body = _build_payload(request, stream=stream)
         for k, v in self._defaults.items():
             body.setdefault(k, v)
+        body["model"] = self.model
         return body
 
     def invoke(self, request: LLMRequest) -> LLMResponse:
@@ -125,7 +127,7 @@ class LLMClient:
 
     def stream(self, request: LLMRequest) -> Iterator[LLMStreamEvent]:
         body = self._post(request, stream=True)
-        tool_call_acc: dict[int, dict] = {}
+        tool_call_acc: dict[int, dict[str, Any]] = {}
         with self._http.stream("POST", "/chat/completions", json=body) as resp:
             resp.raise_for_status()
             for line in resp.iter_lines():

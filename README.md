@@ -16,7 +16,7 @@
 ## 安装
 
 ```bash
-uv sync            # 或 pip install -e ".[dev]"
+uv sync --extra dev
 ```
 
 需要 Python 3.12。
@@ -24,13 +24,17 @@ uv sync            # 或 pip install -e ".[dev]"
 ## 快速开始
 
 ```python
-from agentframe import Agent
+from agentframe import Agent, LLMClient
 
-agent = Agent(
+client = LLMClient(
     model="deepseek-chat",
-    system_prompt="你是一个乐于助人的助手",
     base_url="https://api.deepseek.com",
     api_key="sk-...",
+)
+
+agent = Agent(
+    llm_client=client,
+    system_prompt="你是一个乐于助人的助手",
 )
 
 print(agent.invoke("你好"))
@@ -39,11 +43,13 @@ print(agent.invoke("你好"))
 组合中间件（工厂函数返回中间件类，需实例化）：
 
 ```python
-from agentframe import Agent
+from agentframe import Agent, LLMClient
 from agentframe.middlewares import tools, memory
 
+client = LLMClient(model="deepseek-chat", base_url="...", api_key="...")
+
 agent = Agent(
-    model="deepseek-chat",
+    llm_client=client,
     middlewares=[
         tools([my_function])(),   # 工具
         memory(),                 # 会话持久化
@@ -54,14 +60,15 @@ agent = Agent(
 继承式自定义行为：
 
 ```python
-from agentframe import Agent
+from agentframe import Agent, LLMClient
 
 class MyAgent(Agent):
     def on_content_end(self, content: str) -> None:
         super().on_content_end(content)
         print(content, end="", flush=True)
 
-agent = MyAgent(model="deepseek-chat", middlewares=[memory()])
+client = LLMClient(model="deepseek-chat", base_url="...", api_key="...")
+agent = MyAgent(llm_client=client, middlewares=[memory()])
 ```
 
 ## 架构一览

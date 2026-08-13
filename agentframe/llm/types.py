@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from langchain_core.messages import AIMessage, BaseMessage
 
@@ -15,14 +16,17 @@ class Usage:
 
 @dataclass
 class LLMRequest:
-    """Request body entering LLMClient / before_llm hook."""
+    """Request body entering LLMClient / before_llm hook.
 
-    model: str
+    The model is owned by the client (endpoint), not the request; a request only
+    carries the payload that can vary per call.
+    """
+
     messages: list[BaseMessage]
-    tools: list[dict] | None = None
+    tools: list[dict[str, Any]] | None = None
     temperature: float | None = None
     max_tokens: int | None = None
-    extra: dict = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -34,7 +38,7 @@ class LLMResponse:
     reasoning: str = ""
     finish_reason: str | None = None
     model: str | None = None
-    raw: dict | None = None
+    raw: dict[str, Any] | None = None
 
 
 @dataclass
@@ -43,5 +47,18 @@ class LLMStreamEvent:
 
     type: str  # "reasoning" | "content" | "done"
     content: str = ""
-    tool_calls: list[dict] = field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
     usage: Usage | None = None
+
+
+class LLMClientProtocol(Protocol):
+    """Structural interface for LLM clients.
+
+    A client is an endpoint bound to a `model`; `_act_llm` reads `model` back for
+    the response and only consumes `stream`, so a fake client (e.g. tests'
+    `ScriptedLLMClient`) needs just these two.
+    """
+
+    model: str
+
+    def stream(self, request: LLMRequest) -> Iterator[LLMStreamEvent]: ...

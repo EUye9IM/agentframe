@@ -1,7 +1,7 @@
 # AgentFrame v0.2 测试设计（基类状态转换）
 
 > 范围：仅基类（BaseAgent / Agent / LLMClient 结构体交换）。中间件、multiagent、CLI、compression 的测试后续补齐。
-> 前提改造：`BaseAgent.__init__` 增加 `llm_client: LLMClient | None = None` 注入参数（`None` 时自建），测试注入假客户端。
+> 前提改造：`BaseAgent.__init__` 接收 `llm_client`（必填端点，持有 model），测试注入假客户端。
 
 ## 1. 测试基础设施（tests/conftest.py）
 
@@ -11,8 +11,9 @@
 
 ```python
 class ScriptedLLMClient:
-    def __init__(self, scripts, *, raise_at: int | None = None,
+    def __init__(self, scripts, *, model="test-model", raise_at: int | None = None,
                  exc: BaseException | None = None) -> None:
+        self.model = model
         self.scripts = list(scripts)          # 每次 stream 调用消耗一个脚本
         self.requests: list[LLMRequest] = []  # 记录收到的请求
         self.raise_at = raise_at              # 第 N 次调用抛异常
@@ -79,11 +80,11 @@ class RecordingAgent(BaseAgent):
 | # | 场景 | 断言 |
 |---|------|------|
 | 5 | 记录全部钩子 | 单次 LLM 内顺序：before_llm→on_llm_reasoning→on_reasoning_end→on_llm_content→on_content_end→after_llm |
-| 6 | override `before_llm` 改 `request.model` | 假客户端收到的 request.model 已被改 |
+| 6 | 中间件在 `before_llm` 换 `self.llm_client` | 请求发到新端点，模型随之改变 |
 | 7 | override `after_llm` 把 reasoning 前置 | 历史首条为 reasoning 消息，其后才是 AIMessage |
 | 8 | 多块 content 流 | `on_content_end` 收到完整拼接文本；`on_reasoning_end` 同理 |
 | 9 | 每次追加消息 | `on_state_changed` 每次触发且参数含新增消息 |
-| 10 | 动态类继承 | 测试内定义 A/B 测试中间件，`Agent(model, middlewares=[a(), b()])` → 钩子链顺序 A→B→base；同类重复叠加不冲突 |
+| 10 | 动态类继承 | 测试内定义 A/B 测试中间件，`Agent(llm_client=..., middlewares=[a(), b()])` → 钩子链顺序 A→B→base；同类重复叠加不冲突 |
 
 ### T3 流程控制（tests/test_flow_control.py）
 

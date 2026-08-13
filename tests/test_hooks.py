@@ -4,7 +4,7 @@ from langchain_core.messages import AIMessage
 
 from agentframe import Agent
 
-from .conftest import content, done, reasoning
+from .conftest import ScriptedLLMClient, content, done, reasoning
 
 
 class TestHookChain:
@@ -22,14 +22,26 @@ class TestHookChain:
             "after_llm",
         ]
 
-    def test_before_llm_modifies_request_model(self, make_agent):
-        def hook(request):
-            request.model = "changed-model"
-            return request
+    def test_middleware_switches_client_model(self):
+        from agentframe import Middleware
 
-        agent = make_agent([[content("hi"), done()]], hooks={"before_llm": hook})
+        default = ScriptedLLMClient([[content("hi"), done()]], model="default-model")
+        other = ScriptedLLMClient([[content("hi"), done()]], model="changed-model")
+
+        def make_switcher(other_client):
+            class Switcher(Middleware):
+                def before_llm(self, request):
+                    request = super().before_llm(request)
+                    setattr(self, "llm_client", other_client)
+                    return request
+
+            return Switcher
+
+        agent = Agent(llm_client=default, middlewares=[make_switcher(other)()])
         agent.invoke("hello")
-        assert agent.llm_client.requests[0].model == "changed-model"
+        assert agent.llm_client.model == "changed-model"
+        assert len(other.requests) == 1
+        assert len(default.requests) == 0
 
     def test_after_llm_prepends_reasoning(self, make_agent):
         seen = {}
@@ -91,8 +103,8 @@ class TestDynamicInheritance:
             return M
 
         m1, m2 = make_middleware("m1"), make_middleware("m2")
-        agent = Agent(model="m", middlewares=[m1(), m2()])
-        agent.before_llm(LLMRequest(model="m", messages=[]))
+        agent = Agent(llm_client=ScriptedLLMClient([]), middlewares=[m1(), m2()])
+        agent.before_llm(LLMRequest(messages=[]))
         assert order == ["m1", "m2"]
 
     def test_duplicate_middleware_classes_no_conflict(self):
@@ -108,6 +120,6 @@ class TestDynamicInheritance:
 
             return ToolsMiddleware
 
-        agent = Agent(model="m", middlewares=[tools("t1")(), tools("t2")()])
-        req = agent.before_llm(LLMRequest(model="m", messages=[]))
+        agent = Agent(llm_client=ScriptedLLMClient([]), middlewares=[tools("t1")(), tools("t2")()])
+        req = agent.before_llm(LLMRequest(messages=[]))
         assert req.tools == ["t1", "t2"]

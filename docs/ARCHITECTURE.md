@@ -101,8 +101,7 @@ class Usage:
 
 @dataclass
 class LLMRequest:
-    """进入 LLMClient / before_llm 的请求结构体"""
-    model: str
+    """进入 LLMClient / before_llm 的请求结构体（model 归 LLMClient 端点持有）"""
     messages: list[BaseMessage]            # langchain 消息（传输层内部转 OpenAI dict）
     tools: list[dict] | None = None        # OpenAI 工具格式
     temperature: float | None = None
@@ -133,7 +132,8 @@ class LLMStreamEvent:
 ```python
 # llm/client.py
 class LLMClient:
-    def __init__(self, *, base_url: str, api_key: str | None, **defaults) -> None:
+    def __init__(self, *, base_url: str, model: str, api_key: str | None, **defaults) -> None:
+        self.model = model                           # 端点绑定模型
         self._http = httpx.Client(base_url=base_url,
                                   headers={"Authorization": f"Bearer {api_key}"}, ...)
         self._defaults = defaults                     # temperature 等默认值，与 request 合并
@@ -166,7 +166,7 @@ class LLMClient:
 | `after_trace` | `(data: AgentState, session: str\|None) -> str` | 变换 | invoke() 出口，可改写结果 |
 | `before_turn` | `(data: AgentState) -> AgentState` | 变换 | 每个回合（LLM 调用）开始 |
 | `after_turn` | `(data: AgentState) -> AgentState` | 变换 | TOOLS 结束 / 无工具时 LLM 结束 |
-| `before_llm` | `(request: LLMRequest) -> LLMRequest` | 变换 | LLM 调用前，可改请求体（model/messages/tools/temperature...） |
+| `before_llm` | `(request: LLMRequest) -> LLMRequest` | 变换 | LLM 调用前，可改请求体（messages/tools/temperature...） |
 | `on_llm_reasoning` | `(text: str) -> None` | 事件/流式 | 每段 reasoning 流 |
 | `on_reasoning_end` | `(reasoning: str) -> None` | 事件 | 思考结束，通知完整思考内容 |
 | `on_llm_content` | `(text: str) -> None` | 事件/流式 | 每段 content 流 |
@@ -233,7 +233,7 @@ def _act_llm(self, state):
     self.on_reasoning_end(request_reasoning_accumulated)   # 思考结束事件
     self.on_content_end(full)                               # 消息结束事件
     response = LLMResponse(message=AIMessage(content=full, tool_calls=tool_calls or []),
-                           usage=usage, model=request.model)
+                           usage=usage, model=self.llm_client.model)
     return {"messages": self.after_llm(response)}
 ```
 
@@ -307,12 +307,12 @@ def tools(functions):
 
 ```python
 class Agent(BaseAgent):
-    def __init__(self, model, *, system_prompt=None, middlewares=None, api_key=None, base_url=None):
+    def __init__(self, *, llm_client, system_prompt=None, middlewares=None):
         mws = list(middlewares or [])
         if mws:
             Concrete = type("_ConcreteAgent", (*[type(m) for m in mws], type(self)), {})
             self.__class__ = Concrete          # MRO = 中间件顺序 = 执行顺序
-        super().__init__(model, system_prompt=system_prompt, api_key=api_key, base_url=base_url)
+        super().__init__(llm_client=llm_client, system_prompt=system_prompt)
 ```
 
 ### 7.3 自定义状态
@@ -321,14 +321,14 @@ class Agent(BaseAgent):
 
 ### 7.4 model 切换
 
-`before_llm` 拿到 `LLMRequest`，中间件直接改 `request.model`（同供应商换模型）或 `self.llm_client = fallback_client`（换供应商/兜底）：
+model 归 `LLMClient`（端点）持有，`Agent` 不感知模型；切换模型 = 换 client。中间件在 `before_llm` 里 `self.llm_client = fallback_client`（换供应商/兜底）：
 
 ```python
 class FallbackMiddleware(Middleware):
     def before_llm(self, request):
         request = super().before_llm(request)
         if self._primary_down:
-            request.model = self._fallback_model
+            self.llm_client = self._fallback_client
         return request
 ```
 
@@ -336,8 +336,9 @@ class FallbackMiddleware(Middleware):
 
 ```python
 # 组合式（默认用法）
+client = LLMClient(model="deepseek-chat", base_url="...", api_key="...")
 agent = Agent(
-    model="deepseek-chat",
+    llm_client=client,
     system_prompt="...",
     middlewares=[tools([run_bash]), mcp([{...}]), compress(100000), memory()],
 )
@@ -349,7 +350,7 @@ class MyChat(Agent):
         super().on_content_end(content)
         self.ui.write(content)
 
-my = MyChat(model=..., middlewares=[memory()])
+my = MyChat(llm_client=client, middlewares=[memory()])
 ```
 
 | 方法 | 签名 | 说明 |
@@ -399,7 +400,7 @@ pyproject.toml           # version 0.2.0，去 pytest-asyncio
 | compress | `CompressionMiddleware.before_llm` 从 messages 估大小，超阈值摘要 | ✅ |
 | 会话 memory | `MemoryMiddleware`：session_id → thread_id 喂 checkpointer | ✅ |
 | 长期 memory | 中间件持外部 Store，`before_turn` 注入 / `after_turn` 写回 | ✅ |
-| model 切换 | `before_llm` 改 `request.model` 或换 `self.llm_client` | ✅ |
+| model 切换 | 中间件换 `self.llm_client`（model 归端点） | ✅ |
 | 子 Agent / multiagent | 子 Agent 包成 FunctionTool；multiagent 用 `invoke_messages` | ✅ |
 | 错误重试 | `handle_error` → `Command(goto)` + `retry_policy` | ✅ |
 | 流式 UI | `on_llm_content` / `on_content_end` 在 invoke 内同步触发 | ✅ |
