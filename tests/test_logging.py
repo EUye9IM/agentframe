@@ -23,7 +23,7 @@ class TestLoggingMiddleware:
             )
             agent.invoke("hello")
         messages = caplog.messages
-        assert any("trace start: session=s1" in m for m in messages)
+        assert any("trace start: session=s1 ctx_msgs=1" in m for m in messages)
         assert any("trace end: session=s1" in m for m in messages)
         assert any(m.startswith("turn start: session=s1") for m in messages)
         assert any(m.startswith("turn end: session=s1") for m in messages)

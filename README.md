@@ -102,7 +102,7 @@ Agent（公共类，可继承 + 可组合）
 
 | 类别 | 钩子 | 说明 |
 |------|------|------|
-| trace | `before_trace` / `after_trace` | 整个回合前后 |
+| trace | `before_trace` / `after_trace` | 整个回合前后。`before_trace(messages, session_id)` 收到恢复的历史 + 本轮 human，可整体重写会话（压缩/注入记忆），结果由框架写回 checkpointer |
 | turn | `before_turn` / `after_turn` | 一次 LLM 调用（含其工具输出）前后；`after_turn` 可改写本 turn 消息并写回 |
 | LLM | `before_llm` / `on_llm_reasoning` / `on_reasoning_end` / `on_llm_content` / `on_content_end` / `after_llm` | 请求可改、流式事件、响应转消息历史 |
 | 工具 | `before_tool_call` / `after_tool_result` | 审批子集、结果转消息历史（含 `tool_call_id`） |
@@ -123,8 +123,9 @@ Agent（公共类，可继承 + 可组合）
 
 - ✅ 核心：`BaseAgent` / 钩子协议 / `Phase` 枚举 / `AgentState`
 - ✅ LLM 层：`LLMClient`（裸 httpx）/ `LLMRequest` / `LLMResponse` / `LLMStreamEvent`
-- ✅ 测试：38 个用例（状态转换 / 钩子 / 错误处理 / LLMClient 解析）
-- 🚧 实现中：middlewares（tools/mcp/compress/memory）、multiagent、CLI、examples
+- ✅ 中间件：`log` / `tools` / `compress`
+- ✅ 测试：68 个用例（状态转换 / 钩子 / 错误处理 / LLMClient 解析 / 中间件）
+- 🚧 实现中：middlewares（mcp/memory）、multiagent、CLI、examples
 
 ## License
 

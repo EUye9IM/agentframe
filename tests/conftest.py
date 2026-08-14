@@ -84,9 +84,9 @@ class RecordingAgent(BaseAgent):
         return cast(ScriptedLLMClient, self._llm_client).requests
 
     @override
-    def before_trace(self, input_text: str, session_id: str) -> str:
+    def before_trace(self, messages: list[BaseMessage], session_id: str) -> list[BaseMessage]:
         self.log.append("before_trace")
-        return super().before_trace(input_text, session_id)
+        return super().before_trace(messages, session_id)
 
     @override
     def after_trace(self, data: AgentState, session_id: str) -> str:

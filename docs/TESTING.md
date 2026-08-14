@@ -1,6 +1,6 @@
 # AgentFrame v0.2 测试设计（基类状态转换）
 
-> 范围：仅基类（BaseAgent / Agent / LLMClient 结构体交换）。中间件、multiagent、CLI、compression 的测试后续补齐。
+> 范围：仅基类（BaseAgent / Agent / LLMClient 结构体交换）与中间件（log / tools / compress）。multiagent、CLI 的测试后续补齐。
 > 前提改造：`BaseAgent.__init__` 接收 `llm_client`（必填端点，持有 model），测试注入假客户端。
 
 ## 1. 测试基础设施（tests/conftest.py）
@@ -42,7 +42,7 @@ class RecordingAgent(BaseAgent):
             for name, fn in hooks.items():
                 setattr(self, name, fn.__get__(self, type(self)))
 
-    def before_trace(self, input_text, session_id):      self.log.append(("before_trace",)); return super().before_trace(input_text, session_id)
+    def before_trace(self, messages, session_id):      self.log.append(("before_trace",)); return super().before_trace(messages, session_id)
     def after_trace(self, data, session_id):             self.log.append(("after_trace",));  return super().after_trace(data, session_id)
     def before_turn(self, messages):                     self.log.append(("before_turn",)); return super().before_turn(messages)
     def after_turn(self, messages):                      self.log.append(("after_turn",));  return super().after_turn(messages)

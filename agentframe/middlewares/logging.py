@@ -29,10 +29,10 @@ def log(logger: logging.Logger) -> type[Middleware]:
         _turn_count: int = 0
 
         @override
-        def before_trace(self, input_text: str, session_id: str) -> str:
+        def before_trace(self, messages: list[BaseMessage], session_id: str) -> list[BaseMessage]:
             self._trace_t0 = time.monotonic()
-            logger.info("trace start: session=%s", session_id)
-            return super().before_trace(input_text, session_id)
+            logger.info("trace start: session=%s ctx_msgs=%d", session_id, len(messages))
+            return super().before_trace(messages, session_id)
 
         @override
         def after_trace(self, data: AgentState, session_id: str) -> str:

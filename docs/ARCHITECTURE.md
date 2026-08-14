@@ -64,7 +64,7 @@ class AgentState(TypedDict):
 - 工具列表是 agent 配置（挂 `tool_registry`），不是流转数据。
 - system_prompt / session_id / checkpointer 是构造参数（checkpointer 默认内存 InMemorySaver）。
 - **错误信息不走 state**：LangGraph 将失败以 `NodeError` 函数参数注入 `error_handler`，经 `handle_error` 钩子返回 `Command(update=..., goto=...)` 修复/改道。
-- **无 total_tokens / input_text**：压缩改为从 messages 无状态估算；输入在 `invoke()` 构造好 `[system, human]` 再进图。
+- **无 total_tokens / input_text**：压缩从 messages 无状态估算（`compress` 中间件按字符数粗估）；`invoke()` 先从 checkpointer 物化历史，再构造 `[system, human]` 交给 `before_trace` 整体重写后播种进图。
 
 ### 3.2 状态机（图）与 Phase 枚举
 
@@ -162,7 +162,7 @@ class LLMClient:
 
 | 钩子 | 签名 | 类型 | 触发点 |
 |------|------|------|--------|
-| `before_trace` | `(input: str, session_id: str) -> str` | 变换 | invoke() 入口（唯一入口），可改写输入 |
+| `before_trace` | `(messages: list[BaseMessage], session_id: str) -> list[BaseMessage]` | 变换 | invoke() 入口（唯一入口）。入参 = 恢复的历史 + `[system?, human]`；返回 = 本回合起始上下文，可整体重写会话（压缩/注入记忆），框架经 `update_state` 写回 checkpointer；契约：末位必须是 HumanMessage |
 | `after_trace` | `(data: AgentState, session_id: str) -> str` | 变换 | invoke() 出口，取最后一条 AI 消息（首轮失败时无 AI 消息则返回空串，不回显用户输入） |
 | `before_turn` | `(messages: list[BaseMessage]) -> list[BaseMessage]` | 变换 | 每次 LLM 调用前；入参 = 当前完整消息列表，返回值仅用于构造本轮请求，不写回 state |
 | `after_turn` | `(messages: list[BaseMessage]) -> list[BaseMessage]` | 变换 | 一次 LLM 调用（含其工具输出）结束后；入参 = 本 turn 将写入历史的新消息（有工具时含 [AIMessage, ToolMessage...]），返回值真正写回 state |
@@ -177,7 +177,35 @@ class LLMClient:
 | `handle_next` | `(from_node: Phase, default: Phase) -> Phase` | 流程 | 条件边决策 |
 | `handle_error` | `(error: NodeError, node: Phase) -> Command` | 流程 | 错误处理，修复状态 + 改道（原始异常在 `error.error`） |
 
-### 6.3 `after_llm` / `after_tool_result`：响应/结果 → 消息历史
+### 6.3 `before_trace` 的会话重写与播种
+
+`invoke` 的执行流（核心 `base.py`）：
+
+```python
+def invoke(self, input_text):
+    self._ensure_graph()
+    history = self._load_history(self.session_id)     # checkpointer 读回历史（首轮 []）
+    existing_ids = {m.id for m in history if m.id}
+    fresh = [m for m in self._build_input(input_text) if m.id not in existing_ids]  # [system?, human]，system 去重
+    start = self.before_trace([*history, *fresh], self.session_id)                  # 钩子可整体重写
+    if not start or not isinstance(start[-1], HumanMessage):
+        raise ValueError(...)                          # 契约：末位必须保留 human
+    start = self._hoist_system(start)                  # system(id="system") 提升到首位
+    if start == [*history, *fresh]:                    # 钩子未改写 → 图原生恢复路径,跳过播种
+        state = self._graph.invoke({"messages": fresh}, config=config)
+    else:
+        config = self._seed(self.session_id, start)    # update_state：RemoveMessage 全清历史 + 写 start[:-1]
+        state = self._graph.invoke({"messages": [start[-1]]}, config=config)
+    return self.after_trace(state, self.session_id)
+```
+
+- `_seed` 用 `update_state(config, {"messages": [RemoveMessage(id=...) for old] + start[:-1]})`，返回新 config 再以 `[start[-1]]` 作为图输入；首轮无历史同样适用（顺带支持"trace 起点注入长期记忆"）。
+- `_hoist_system` 把 `id="system"` 的消息提到列表首位，保证任意 `before_trace` 重写下 system prompt 都在会话开头（如记忆注入把内容前置到 system 之前时）。
+- 钩子未改写（`start` 与 `history + fresh` 相等）时跳过播种，直接走图原生恢复路径，避免每轮多写一次 checkpoint。
+- 重写是**持久化**的：`before_trace` 的产出被播种进 checkpoint，本回合与后续回合都从重写后的会话续接——压缩中间件（`compress()`）即基于此把长历史压成一条摘要。
+- `_build_input` 固定 `id="system"`，重入时由 `add_messages` 原位去重，`before_trace` 收到的列表不会出现重复 system。
+
+### 6.4 `after_llm` / `after_tool_result`：响应/结果 → 消息历史
 
 转换逻辑写在钩子内部，子类覆写后调 `super()` 拿父类解析结果，自行控制顺序：
 
@@ -199,7 +227,7 @@ def after_tool_result(self, name: str, result: str, tool_call_id: str) -> list[B
     return [ToolMessage(content=result, tool_call_id=tool_call_id)]
 ```
 
-### 6.4 流式中断（StreamStop 异常 + handle_error）
+### 6.5 流式中断（StreamStop 异常 + handle_error）
 
 中断 = 钩子抛 `StreamStop` 异常，统一走错误路径，由**打断者自己写的中间件**在 `handle_error` 里认领处理：
 
@@ -266,7 +294,7 @@ class InterruptMiddleware(Middleware):
 - 无打断中间件时，Ctrl+C / `StreamStop` 仅中止（partial 丢弃），符合"打断者自己负责"。
 - 中断后的后续动作留给下一轮 `before_llm` / `handle_next`，基类不干预。
 
-### 6.5 错误处理（NodeError + Command 改道）
+### 6.6 错误处理（NodeError + Command 改道）
 
 ```python
 def _default_error_handler(self, state: AgentState, error: NodeError) -> Command:
@@ -361,7 +389,7 @@ my = MyChat(llm_client=client, middlewares=[memory()])
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `invoke` | `(input_text) -> str` | **唯一公开入口**：文本入、str 出，包在 before_trace/after_trace 内；`session_id`（构造参数，默认 `"default"`）内部映射为 LangGraph `thread_id`，同 session 经 checkpointer 沿用之前上下文恢复；逃生口 = 改 `agent.checkpointer`；流式体验走 `on_llm_content`/`on_llm_reasoning` 事件钩子 |
+| `invoke` | `(input_text) -> str` | **唯一公开入口**：文本入、str 出，包在 before_trace/after_trace 内；`session_id`（构造参数，默认 `"default"`）内部映射为 LangGraph `thread_id`，同 session 经 checkpointer 沿用之前上下文恢复；`before_trace` 收到的消息列表 = 恢复的历史 + `[system?, human]`，可整体重写会话（压缩/注入记忆），框架经 `update_state` 播种后本回合与后续回合都从重写后的会话起跑；逃生口 = 改 `agent.checkpointer`；流式体验走 `on_llm_content`/`on_llm_reasoning` 事件钩子 |
 
 ## 9. 模块布局
 
@@ -377,11 +405,11 @@ agentframe/
     client.py            # LLMClient：裸 httpx，invoke/stream
     types.py             # LLMRequest / LLMResponse / LLMStreamEvent / Usage
   middlewares/
-    __init__.py          # 工厂：log / tools（mcp / compress / memory 规划中）
+    __init__.py          # 工厂：log / tools / compress（mcp / memory 规划中）
     logging.py           # log(logger)：标准 logging 记录 trace/turn/llm/tool/error 关键事件
     tools.py             # tools(functions)：注册 + 反射注入 request.tools，register/unregister 动态增删
+    compression.py       # compress(summarizer, threshold_chars, keep_recent)：before_trace 压缩历史
     mcp.py               # MCPMiddleware（规划）
-    compression.py       # CompressionMiddleware（规划）
     memory.py            # MemoryMiddleware（未实现；会话持久化已内置于基类 checkpointer）
   tools/
     registry.py
@@ -402,10 +430,10 @@ pyproject.toml           # version 0.2.0，去 pytest-asyncio
 |------|------|------|
 | tools | `tools(functions)`：`before_llm` 注册进 `_tools` 供分发 + 反射注入 schema；`register`/`unregister` 即时增删 | ✅ |
 | mcp | `MCPMiddleware` 同上，分发走线程桥 | ❌ 未实现 |
-| compress | `CompressionMiddleware.before_llm` 从 messages 估大小，超阈值摘要 | ❌ 未实现 |
+| compress | `compress(summarizer, threshold_chars, keep_recent)`：`before_trace` 从 messages 估大小，超阈值把旧消息压成摘要（默认用 `self.llm_client` 做一次摘要请求），摘要合并进 system 消息保持在首位、不产生 AI→System 非法序列；重写结果写回 checkpoint，后续回合从摘要续接 | ✅ |
 | 会话 memory | 基类内置：`checkpointer`（默认 `InMemorySaver`）+ `session_id`（构造参数，默认 `"default"`，映射 thread_id） | ✅ |
 | 日志/观测 | `LoggingMiddleware`：`log(logger)` 记录 trace/turn/llm/tool/error（含耗时、token 用量、session_id） | ✅ |
-| 长期 memory | 中间件持外部 Store，`before_turn` 注入 / `after_turn` 写回 | ❌ 未实现 |
+| 长期 memory | 中间件持外部 Store，`before_trace` 注入记忆（重写结果写回 checkpoint）/ `after_turn` 写回 | ❌ 未实现（机制已具备：`before_trace` 支持注入） |
 | LangGraph 原生持久化 | 内置默认内存持久化；逃生口 = 换 `agent.checkpointer` 为任意 `BaseCheckpointSaver` | ✅ |
 | model 切换 | 中间件换 `self.llm_client`（model 归端点） | ✅ |
 | 子 Agent / multiagent | 子 Agent 包成 FunctionTool；multiagent 成员经 `invoke` + 独立 checkpointer 线程隔离历史 | ✅ |

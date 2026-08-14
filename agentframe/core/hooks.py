@@ -17,9 +17,14 @@ class Middleware:
     override a subset and call `super().hook(...)` to continue the chain.
     """
 
-    def before_trace(self, input_text: str, session_id: str) -> str:
-        """回合入口（仅 invoke 触发），可改写输入。"""
-        return input_text
+    def before_trace(self, messages: list[BaseMessage], session_id: str) -> list[BaseMessage]:
+        """回合入口（仅 invoke 触发）。入参 = 恢复的历史 + [system?, 新的 HumanMessage]；
+        返回值 = 本回合起始上下文，框架会将重写结果持久化回 checkpointer
+        （如把过长历史压缩成摘要、注入长期记忆）。
+
+        契约：返回列表的末位必须是入参携带的 HumanMessage（用户本轮输入），
+        框架据此断言；中间件可在其前方任意增删/重写其他消息。"""
+        return messages
 
     def after_trace(self, data: AgentState, session_id: str) -> str:
         """回合出口（invoke 收尾）。取最后一条 AI 消息；
