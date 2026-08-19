@@ -124,9 +124,11 @@ class LLMClient:
         api_key: str | None = None,
         timeout: float = 120.0,
         transport: httpx.BaseTransport | None = None,
+        thinking: bool = True,
         **defaults: object,
     ) -> None:
         self.model: str = model
+        self.thinking: bool = thinking
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -157,6 +159,8 @@ class LLMClient:
         for k, v in self._defaults.items():
             body.setdefault(k, v)
         body["model"] = self.model
+        if not self.thinking:
+            body["thinking"] = {"enabled": False}
         return body
 
     def invoke(self, request: LLMRequest) -> LLMResponse:

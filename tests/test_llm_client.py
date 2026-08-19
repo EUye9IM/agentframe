@@ -145,6 +145,19 @@ class TestInvoke:
         assert captured["body"]["top_p"] == 1.0
         assert captured["body"]["model"] == "m"
 
+    def test_thinking_disabled_by_default(self):
+        captured: dict[str, Any] = {}
+        client = LLMClient(base_url="http://test", model="m", transport=_capturing_transport(captured))
+        client.invoke(_request())
+        assert "thinking" not in captured["body"]
+
+    def test_thinking_disabled_when_false(self):
+        captured: dict[str, Any] = {}
+        client = LLMClient(base_url="http://test", model="m", transport=_capturing_transport(captured), thinking=False)
+        client.invoke(_request())
+        assert captured["body"]["thinking"] == {"enabled": False}
+
+
 class TestStream:
     def test_content_events_and_usage_from_final_chunk(self):
         client = _make_client(

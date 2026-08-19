@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .compression import compress
+from .compress import compress
 from .logging import log
 from .tools import tools
 
